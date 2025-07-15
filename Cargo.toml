@@ -1,0 +1,35 @@
+[package]
+name = "iothub"
+version = "0.1.0"
+edition = "2021"
+authors = ["LI Leding <lileding@gmail.com>"]
+description = "High-performance MQTT server implementation in Rust"
+license = "MIT"
+repository = "https://github.com/yourusername/iothub"
+keywords = ["mqtt", "iot", "messaging", "broker", "server"]
+categories = ["network-programming", "asynchronous"]
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+bytes = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1.0", features = ["derive"] }
+anyhow = "1.0"
+thiserror = "1.0"
+uuid = { version = "1.0", features = ["v4"] }
+dashmap = "5.0"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "broker_benchmark"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
