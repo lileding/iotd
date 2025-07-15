@@ -42,7 +42,8 @@ impl ClientHandler {
                     }
                 }
                 Ok(None) => {
-                    // Need more data, continue
+                    // This shouldn't happen with the new read logic
+                    continue;
                 }
                 Err(e) => {
                     error!("Error reading packet: {}", e);
@@ -50,10 +51,12 @@ impl ClientHandler {
                 }
             }
 
-            // Handle broker messages (non-blocking)
-            if let Err(e) = self.handle_broker_messages().await {
-                debug!("Broker message handling stopped: {}", e);
-                break;
+            // Handle broker messages only if session exists
+            if self.session.is_some() {
+                if let Err(e) = self.handle_broker_messages().await {
+                    debug!("Broker message handling stopped: {}", e);
+                    break;
+                }
             }
         }
 
@@ -67,20 +70,28 @@ impl ClientHandler {
     }
 
     async fn read_packet(&mut self) -> Result<Option<Packet>> {
-        // Read data into buffer
-        let mut temp_buf = [0u8; 1024];
-        let n = self.stream.read(&mut temp_buf).await?;
-        
-        if n == 0 {
-            return Err(anyhow::anyhow!("Connection closed"));
+        // Try to decode existing buffer first
+        match Packet::decode(&mut self.buffer) {
+            Ok(Some(packet)) => {
+                return Ok(Some(packet));
+            },
+            Ok(None) => {}, // Need more data
+            Err(e) => return Err(anyhow::anyhow!("Packet decode error: {}", e)),
         }
 
-        self.buffer.extend_from_slice(&temp_buf[..n]);
-
-        // Try to decode a packet
-        match Packet::decode(&mut self.buffer) {
-            Ok(packet) => Ok(packet),
-            Err(e) => Err(anyhow::anyhow!("Packet decode error: {}", e)),
+        // Read more data into buffer
+        let mut temp_buf = [0u8; 1024];
+        match self.stream.read(&mut temp_buf).await {
+            Ok(0) => Err(anyhow::anyhow!("Connection closed")),
+            Ok(n) => {
+                self.buffer.extend_from_slice(&temp_buf[..n]);
+                // Try to decode again
+                match Packet::decode(&mut self.buffer) {
+                    Ok(packet) => Ok(packet),
+                    Err(e) => Err(anyhow::anyhow!("Packet decode error: {}", e)),
+                }
+            }
+            Err(e) => Err(anyhow::anyhow!("Read error: {}", e)),
         }
     }
 
@@ -119,6 +130,7 @@ impl ClientHandler {
             return_code,
         };
 
+        debug!("Sending CONNACK to client: {}", connect.client_id);
         self.send_packet(Packet::ConnAck(connack)).await?;
 
         if return_code == v3::connect_return_codes::ACCEPTED {
@@ -272,6 +284,7 @@ impl ClientHandler {
         let mut buf = BytesMut::new();
         packet.encode(&mut buf);
         self.stream.write_all(&buf).await?;
+        self.stream.flush().await?;
         Ok(())
     }
 }

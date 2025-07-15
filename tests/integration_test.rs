@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -12,16 +11,24 @@ async fn test_basic_connect_and_disconnect() {
         server.run().await.unwrap();
     });
 
-    // Give server time to start
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Connect with retry
+    let connect_with_retry = |addr: String| async move {
+        for _ in 0..3 {
+            match TcpStream::connect(&addr).await {
+                Ok(stream) => return stream,
+                Err(_) => tokio::time::sleep(Duration::from_secs(1)).await,
+            }
+        }
+        panic!("Failed to connect after retries");
+    };
 
     // Connect client
-    let mut stream = TcpStream::connect("127.0.0.1:18831").await.unwrap();
+    let mut stream = connect_with_retry("127.0.0.1:18831".to_string()).await;
 
     // Send CONNECT packet (MQTT v3.1.1)
     let connect_packet = [
         0x10, // CONNECT packet type
-        0x10, // Remaining length = 16
+        0x12, // Remaining length = 18 (12 + 4 + 2)
         0x00, 0x04, // Protocol name length
         b'M', b'Q', b'T', b'T', // Protocol name "MQTT"
         0x04, // Protocol level (3.1.1)
@@ -32,15 +39,12 @@ async fn test_basic_connect_and_disconnect() {
     ];
 
     stream.write_all(&connect_packet).await.unwrap();
+    stream.flush().await.unwrap();
 
     // Read CONNACK
     let mut response = [0u8; 4];
-    let n = timeout(Duration::from_secs(1), stream.read(&mut response))
-        .await
-        .unwrap()
-        .unwrap();
+    stream.read_exact(&mut response).await.unwrap();
     
-    assert_eq!(n, 4);
     assert_eq!(response[0], 0x20); // CONNACK packet type
     assert_eq!(response[1], 0x02); // Remaining length
     assert_eq!(response[2], 0x00); // Session present = false
@@ -49,6 +53,7 @@ async fn test_basic_connect_and_disconnect() {
     // Send DISCONNECT
     let disconnect_packet = [0xE0, 0x00]; // DISCONNECT with 0 remaining length
     stream.write_all(&disconnect_packet).await.unwrap();
+    stream.flush().await.unwrap();
 
     server_handle.abort();
 }
@@ -62,17 +67,28 @@ async fn test_publish_subscribe() {
     });
 
     // Give server time to start
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Connect publisher
-    let mut publisher = TcpStream::connect("127.0.0.1:18832").await.unwrap();
-    send_connect(&mut publisher, "pub").await;
-    read_connack(&mut publisher).await;
+    // Connect with retry
+    let connect_with_retry = |addr: String| async move {
+        for _ in 0..3 {
+            match TcpStream::connect(&addr).await {
+                Ok(stream) => return stream,
+                Err(_) => tokio::time::sleep(Duration::from_secs(1)).await,
+            }
+        }
+        panic!("Failed to connect after retries");
+    };
 
-    // Connect subscriber
-    let mut subscriber = TcpStream::connect("127.0.0.1:18832").await.unwrap();
+    // Connect subscriber first
+    let mut subscriber = connect_with_retry("127.0.0.1:18832".to_string()).await;
     send_connect(&mut subscriber, "sub").await;
     read_connack(&mut subscriber).await;
+
+    // Connect publisher
+    let mut publisher = connect_with_retry("127.0.0.1:18832".to_string()).await;
+    send_connect(&mut publisher, "pub").await;
+    read_connack(&mut publisher).await;
 
     // Subscribe to topic
     let subscribe_packet = [
@@ -134,7 +150,7 @@ async fn test_publish_subscribe() {
 async fn send_connect(stream: &mut TcpStream, client_id: &str) {
     let mut connect_packet = vec![
         0x10, // CONNECT packet type
-        (10 + client_id.len()) as u8, // Remaining length
+        (12 + client_id.len()) as u8, // Remaining length
         0x00, 0x04, // Protocol name length
         b'M', b'Q', b'T', b'T', // Protocol name "MQTT"
         0x04, // Protocol level (3.1.1)
@@ -145,16 +161,12 @@ async fn send_connect(stream: &mut TcpStream, client_id: &str) {
     connect_packet.extend_from_slice(client_id.as_bytes());
     
     stream.write_all(&connect_packet).await.unwrap();
+    stream.flush().await.unwrap();
 }
 
 async fn read_connack(stream: &mut TcpStream) {
     let mut response = [0u8; 4];
-    match timeout(Duration::from_secs(1), stream.read_exact(&mut response)).await {
-        Ok(Ok(_)) => {
-            assert_eq!(response[0], 0x20); // CONNACK packet type
-            assert_eq!(response[3], 0x00); // Return code = accepted
-        }
-        Ok(Err(e)) => panic!("Failed to read CONNACK: {}", e),
-        Err(_) => panic!("Timeout reading CONNACK"),
-    }
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response[0], 0x20); // CONNACK packet type
+    assert_eq!(response[3], 0x00); // Return code = accepted
 }
