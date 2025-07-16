@@ -2,7 +2,7 @@
 
 ## Overview
 
-IoTHub is a high-performance MQTT server implemented in Rust using Tokio for asynchronous I/O. The architecture is designed for scalability, performance, and extensibility with a modular approach that supports multiple transport protocols and concurrent client connections.
+IoTHub is a high-performance MQTT server implemented in Rust using Tokio for asynchronous I/O. The architecture features a Server → Broker → Session hierarchy designed for scalability, reliability, and extensibility. The current implementation (Stone 2) introduces multi-broker support, graceful shutdown, session management with unique sessionId, and transport abstraction for future protocol support.
 
 ## Core Architecture
 
@@ -43,11 +43,13 @@ The `Server` is the central orchestrator that manages all components and provide
 
 ```rust
 pub struct Server {
-    brokers: Vec<Broker>,
-    sessions: Arc<DashMap<ClientId, Arc<Session>>>,
-    router: Arc<Router>,
     config: Config,
-    shutdown_tx: broadcast::Sender<()>,
+    brokers: DashMap<String, Arc<Broker>>,
+    sessions: Mutex<DashMap<String, Arc<Session>>>, // clientId -> Session
+    router: Router,
+    draining: RwLock<bool>,
+    shutdown: Arc<Notify>,
+    completed: Arc<Notify>,
 }
 ```
 
@@ -59,24 +61,22 @@ pub struct Server {
 - Manages cross-cutting concerns (auth, metrics, logging)
 
 **Key Methods:**
-- `new(config: Config) -> Result<Self>` - Creates new server instance
-- `run() -> Result<()>` - Starts all brokers and enters main loop
-- `stop() -> Result<()>` - Initiates graceful shutdown
-- `register_session(session: Arc<Session>) -> Result<()>` - Registers new session
-- `subscribe(client_id: String, topic_filter: &str) -> Result<()>` - Handles subscription
-- `publish(client_id: String, packet: PublishPacket) -> Result<()>` - Handles publishing
+- `new(config: &Config) -> Arc<Self>` - Creates new server instance
+- `run(self: Arc<Self>) -> Result<()>` - Starts all brokers and waits for shutdown
+- `shutdown(&self)` - Initiates graceful shutdown with drain mode
+- `register_session(session: Arc<Session>) -> Result<()>` - Registers new session with conflict resolution
+- `unregister_session(session_id: &str)` - Removes session on disconnect
 
 ### 2. Broker
 
 A `Broker` represents a network listener for a specific protocol and address.
 
 ```rust
-pub struct Broker {
-    protocol: Protocol,
+struct Broker {
     bind_address: String,
-    listener: Box<dyn AsyncListener>,
     server: Arc<Server>,
-    shutdown_rx: broadcast::Receiver<()>,
+    shutdown: Arc<Notify>,
+    completed: Arc<Notify>,
 }
 ```
 
@@ -106,21 +106,24 @@ A `Session` represents a connected IoT client and manages its entire lifecycle.
 
 ```rust
 pub struct Session {
+    session_id: String,
     client_id: String,
-    stream: Box<dyn AsyncStream>,
-    subscription_rx: mpsc::Receiver<Message>,
+    clean_session: bool,
+    keep_alive: u16,
+    stream: RwLock<Box<dyn AsyncStream>>,
     server: Arc<Server>,
-    shutdown_rx: broadcast::Receiver<()>,
-    state: SessionState,
+    shutdown: Arc<Notify>,
+    completed: Arc<Notify>,
 }
 ```
 
 **Responsibilities:**
+- Generates unique sessionId for internal routing
 - Handles MQTT protocol packets (CONNECT, PUBLISH, SUBSCRIBE, etc.)
-- Manages authentication and authorization
-- Processes subscription messages from router
-- Maintains session state and QoS handling
-- Cleans up subscriptions on disconnect
+- Manages session state and client connection
+- Provides default client ID (`"__iothub_{sessionId}"`) if not provided
+- Handles session cleanup on disconnect
+- Registers/unregisters with server for session management
 
 **Lifecycle:**
 1. **Connection**: Process CONNECT packet
@@ -154,16 +157,18 @@ The `Router` handles message routing and subscription management.
 
 ```rust
 pub struct Router {
-    subscriptions: Arc<DashMap<TopicFilter, HashSet<SessionId>>>,
-    sessions: Arc<DashMap<SessionId, mpsc::Sender<Message>>>,
+    // Internal routing uses sessionId for session identification
+    // External MQTT compatibility uses clientId for session lookup
 }
 ```
 
 **Responsibilities:**
+- Uses sessionId internally for routing (avoids client ID conflicts)
 - Manages topic subscriptions and unsubscriptions
 - Routes published messages to matching subscribers
 - Handles wildcard topic matching (`+` and `#`)
 - Maintains thread-safe subscription state
+- Provides session cleanup on disconnect
 
 **Topic Matching:**
 - `+` - Single-level wildcard (e.g., `sensor/+/temperature`)
@@ -179,10 +184,17 @@ pub struct Router {
 
 ```rust
 pub struct Config {
+    pub server: ServerConfig,
+    pub auth: AuthConfig,
+    pub storage: StorageConfig,
+    pub logging: LoggingConfig,
+}
+
+pub struct ServerConfig {
     pub listen_addresses: Vec<String>,
     pub max_connections: usize,
-    pub session_timeout: Duration,
-    pub keep_alive_timeout: Duration,
+    pub session_timeout_secs: u64,
+    pub keep_alive_timeout_secs: u64,
     pub max_packet_size: usize,
     pub retained_message_limit: usize,
 }
@@ -219,9 +231,10 @@ pub trait AsyncStream: Send + Sync {
 
 ### Thread Safety
 - **Server**: Shared via `Arc<Server>` across all components
-- **Sessions**: Stored in `Arc<DashMap<ClientId, Arc<Session>>>`
-- **Router**: Thread-safe with `Arc<DashMap<...>>`
-- **Shutdown**: Coordinated via `broadcast::Sender<()>`
+- **Sessions**: Stored in `Mutex<DashMap<String, Arc<Session>>>` (clientId -> Session)
+- **Brokers**: Stored in `DashMap<String, Arc<Broker>>` (address -> Broker)
+- **Router**: Thread-safe operations for session management
+- **Shutdown**: Coordinated via `Arc<Notify>` for graceful shutdown
 
 ### Async Tasks
 - **Server**: Main coordinator, spawns broker tasks
@@ -230,9 +243,9 @@ pub trait AsyncStream: Send + Sync {
 - **Router**: Embedded in server, no separate task
 
 ### Message Passing
-- **Subscription Messages**: `mpsc::Receiver<Message>` per session
-- **Shutdown Signals**: `broadcast::Receiver<()>` for all components
-- **Inter-component Communication**: Direct async method calls
+- **Shutdown Signals**: `Arc<Notify>` for graceful shutdown coordination
+- **Session Management**: Direct async method calls between components
+- **Inter-component Communication**: Server as central message hub
 
 ## Error Handling
 

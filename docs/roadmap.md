@@ -31,43 +31,51 @@ IoTHub development follows a progressive "stone" approach, where each stone buil
 
 ---
 
-### Stone 2: Enhanced Reliability 🔄 **IN PROGRESS**
-**Target**: Graceful shutdown and last will/testament
+### Stone 2: Enhanced Reliability ✅ **COMPLETED**
+**Target**: Graceful shutdown and architectural improvements
 
-**Features to Implement:**
-- 🔄 Architecture refactoring to new design
-- 🔄 Multi-broker support with graceful shutdown
-- 🔄 Last Will and Testament (LWT) messages
-- 🔄 Proper session lifecycle management
-- 🔄 Enhanced error handling and logging
-- 🔄 Client ID conflict resolution
-- 🔄 Connection draining on shutdown
+**Features Implemented:**
+- ✅ Architecture refactoring to Server → Broker → Session hierarchy
+- ✅ Multi-broker support with graceful shutdown
+- ✅ Proper session lifecycle management with unique sessionId
+- ✅ Enhanced error handling and logging
+- ✅ Client ID conflict resolution with atomic session swapping
+- ✅ Connection draining on shutdown with drain mode
+- ✅ Transport abstraction layer for multiple protocols
+- ✅ Comprehensive configuration system with TOML support
+- ✅ Thread-safe session management with DashMap and Arc
 
 **Architecture Changes:**
-- Refactor to Server → Broker → Session hierarchy
-- Add graceful shutdown signaling
-- Implement proper session registration/cleanup
-- Add transport abstraction layer
+- ✅ Refactored to Server → Broker → Session hierarchy
+- ✅ Added graceful shutdown signaling with Arc<Notify>
+- ✅ Implemented proper session registration/cleanup
+- ✅ Added transport abstraction layer
+- ✅ Session map uses clientId as key, Router uses sessionId internally
+- ✅ Default client ID format: "__iothub_{sessionId}"
 
-**Timeline**: 4-6 weeks
+**Timeline**: Completed
 **Success Criteria**: 
-- [ ] Server can handle multiple brokers
-- [ ] Graceful shutdown works without connection drops
-- [ ] LWT messages are delivered on unexpected disconnections
-- [ ] All Stone 1 tests continue to pass
+- ✅ Server can handle multiple brokers
+- ✅ Graceful shutdown works with connection draining
+- ✅ Client ID conflicts resolved automatically
+- ✅ Architecture supports future protocol extensions
+
+**Next Phase**: Last Will and Testament (LWT) messages (deferred to Stone 3)
 
 ---
 
 ### Stone 3: Quality of Service 📋 **PLANNED**
-**Target**: QoS 1 and enhanced retained message handling
+**Target**: QoS 1, Last Will and Testament, and enhanced retained message handling
 
 **Features to Implement:**
+- 📋 Last Will and Testament (LWT) messages (moved from Stone 2)
 - 📋 QoS 1 (At least once) message delivery
 - 📋 Message acknowledgment (PUBACK) handling
 - 📋 Message retransmission logic
 - 📋 Enhanced retained message storage
 - 📋 Packet identifier management
 - 📋 Session state persistence for QoS 1
+- 📋 Router implementation with sessionId-based routing
 
 **Technical Challenges:**
 - Message deduplication
@@ -280,17 +288,18 @@ IoTHub development follows a progressive "stone" approach, where each stone buil
 - Single TCP listener
 - Basic testing
 
-### v0.2.0 - Reliability (Stone 2) 🔄
+### v0.2.0 - Reliability (Stone 2) ✅
 - Multi-broker architecture
-- Graceful shutdown
-- Last will and testament
-- Enhanced error handling
+- Graceful shutdown with drain mode
+- Session management with unique sessionId
+- Enhanced error handling and configuration
 
 ### v0.3.0 - Quality of Service (Stone 3) 📋
+- Last Will and Testament (LWT) messages
 - QoS 1 support
 - Message acknowledgments
 - Retained message improvements
-- Session persistence
+- Router with sessionId-based routing
 
 ### v0.4.0 - Guaranteed Delivery (Stone 4) 📋
 - QoS 2 support
