@@ -1,7 +1,7 @@
 use crate::transport::AsyncStream;
 use crate::server::Server;
 use crate::broker::Broker;
-use crate::protocol::packet::Packet;
+use crate::protocol::packet;
 use anyhow::Result;
 use std::sync::Arc;
 use std::error::Error;
@@ -97,6 +97,7 @@ impl Session {
                 Some(message) = message_rx.recv() => {
                     if let Err(e) = self.handle_message(message).await {
                         error!("Failed to handle message for session {}: {}", session_id, e);
+                        break;
                     }
                 }
                 
@@ -143,16 +144,16 @@ impl Session {
         let mut stream = self.stream.write().await;
         
         // Parse and validate packet directly from stream
-        match Packet::decode(&mut *stream).await {
+        match packet::Packet::decode(&mut *stream).await {
             Ok(packet) => {
                 // Handle different packet types
                 match packet {
-                    Packet::Connect(p) => self.handle_connect(p).await?,
-                    Packet::Publish(p) => self.handle_publish(p).await?,
-                    Packet::Subscribe(p) => self.handle_subscribe(p).await?,
-                    Packet::Unsubscribe(p) => self.handle_unsubscribe(p).await?,
-                    Packet::PingReq => self.handle_pingreq().await?,
-                    Packet::Disconnect => {
+                    packet::Packet::Connect(p) => self.handle_connect(p, stream.as_mut()).await?,
+                    packet::Packet::Publish(p) => self.handle_publish(p).await?,
+                    packet::Packet::Subscribe(p) => self.handle_subscribe(p, stream.as_mut()).await?,
+                    packet::Packet::Unsubscribe(p) => self.handle_unsubscribe(p, stream.as_mut()).await?,
+                    packet::Packet::PingReq => self.handle_pingreq(stream.as_mut()).await?,
+                    packet::Packet::Disconnect => {
                         self.handle_disconnect().await?;
                         return Ok(false); // End session
                     }
@@ -180,7 +181,7 @@ impl Session {
         Ok(true) // Continue session
     }
 
-    async fn handle_connect(self: &Arc<Self>, packet: crate::protocol::packet::ConnectPacket) -> Result<()> {
+    async fn handle_connect(self: &Arc<Self>, packet: packet::ConnectPacket, stream: &mut dyn AsyncStream) -> Result<()> {
         info!("CONNECT received: client_id={}, clean_session={}", packet.client_id, packet.clean_session);
 
         let old_session_id = self.session_id().await;
@@ -195,13 +196,13 @@ impl Session {
         self.connected.store(true, Ordering::Release);
 
         // Send CONNACK response
-        let connack = crate::protocol::packet::ConnAckPacket {
+        let connack = packet::ConnAckPacket {
             session_present: false,
             return_code: crate::protocol::v3::connect_return_codes::ACCEPTED,
         };
         let mut buf = bytes::BytesMut::new();
-        Packet::ConnAck(connack).encode(&mut buf);
-        self.stream.write().await.write_all(&buf).await?;
+        packet::Packet::ConnAck(connack).encode(&mut buf);
+        stream.write_all(&buf).await?;
 
         // Remove from half-connected sessions before registering with server
         self.broker.remove_half_connected_session(&old_session_id).await;
@@ -212,7 +213,7 @@ impl Session {
         Ok(())
     }
 
-    async fn handle_publish(&self, packet: crate::protocol::packet::PublishPacket) -> Result<()> {
+    async fn handle_publish(&self, packet: packet::PublishPacket) -> Result<()> {
         // Check if connected
         if !self.connected.load(Ordering::Acquire) {
             let session_id = self.session_id().await;
@@ -227,7 +228,7 @@ impl Session {
         Ok(())
     }
 
-    async fn handle_subscribe(&self, packet: crate::protocol::packet::SubscribePacket) -> Result<()> {
+    async fn handle_subscribe(&self, packet: packet::SubscribePacket, stream: &mut dyn AsyncStream) -> Result<()> {
         // Check if connected
         if !self.connected.load(Ordering::Acquire) {
             let session_id = self.session_id().await;
@@ -238,17 +239,17 @@ impl Session {
         let session_id = self.session_id().await;
         info!("SUBSCRIBE received for session {}: topics={:?}", session_id, packet.topic_filters);
         // Handle subscription logic and send SUBACK
-        let suback = crate::protocol::packet::SubAckPacket {
+        let suback = packet::SubAckPacket {
             packet_id: packet.packet_id,
             return_codes: vec![crate::protocol::v3::subscribe_return_codes::MAXIMUM_QOS_0; packet.topic_filters.len()],
         };
         let mut buf = bytes::BytesMut::new();
-        Packet::SubAck(suback).encode(&mut buf);
-        self.stream.write().await.write_all(&buf).await?;
+        packet::Packet::SubAck(suback).encode(&mut buf);
+        stream.write_all(&buf).await?;
         Ok(())
     }
 
-    async fn handle_pingreq(&self) -> Result<()> {
+    async fn handle_pingreq(&self, stream: &mut dyn AsyncStream) -> Result<()> {
         // Check if connected
         if !self.connected.load(Ordering::Acquire) {
             let session_id = self.session_id().await;
@@ -258,14 +259,14 @@ impl Session {
 
         let session_id = self.session_id().await;
         info!("PINGREQ received for session {}", session_id);
-        let pingresp = Packet::PingResp;
+        let pingresp = packet::Packet::PingResp;
         let mut buf = bytes::BytesMut::new();
         pingresp.encode(&mut buf);
-        self.stream.write().await.write_all(&buf).await?;
+        stream.write_all(&buf).await?;
         Ok(())
     }
 
-    async fn handle_unsubscribe(&self, packet: crate::protocol::packet::UnsubscribePacket) -> Result<()> {
+    async fn handle_unsubscribe(&self, packet: packet::UnsubscribePacket, stream: &mut dyn AsyncStream) -> Result<()> {
         // Check if connected
         if !self.connected.load(Ordering::Acquire) {
             let session_id = self.session_id().await;
@@ -276,12 +277,12 @@ impl Session {
         let session_id = self.session_id().await;
         info!("UNSUBSCRIBE received for session {}: topics={:?}", session_id, packet.topic_filters);
         // Handle unsubscription logic and send UNSUBACK
-        let unsuback = crate::protocol::packet::UnsubAckPacket {
+        let unsuback = packet::UnsubAckPacket {
             packet_id: packet.packet_id,
         };
         let mut buf = bytes::BytesMut::new();
-        Packet::UnsubAck(unsuback).encode(&mut buf);
-        self.stream.write().await.write_all(&buf).await?;
+        packet::Packet::UnsubAck(unsuback).encode(&mut buf);
+        stream.write_all(&buf).await?;
         Ok(())
     }
 

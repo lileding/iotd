@@ -106,15 +106,11 @@ impl Server {
     }
 
     pub async fn unregister_session(&self, session_id: &str) {
-        let draining = self.draining.read().await;
-        if *draining {
-            return;
-        }
-
-        // Find session by session_id and remove it
+        // When a session ends (either on its own or during server shutdown),
+        // it calls this function to remove itself from the server's records.
         if let Some((_, session)) = self.sessions.remove(session_id) {
-            session.shutdown().await;
             self.router.unsubscribe_all(&session).await;
+            info!("Unregistered session {}", session_id);
         }
     }
 }
