@@ -1,6 +1,7 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::io::{self, Cursor};
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 #[derive(Debug, Error)]
 pub enum PacketError {
@@ -141,32 +142,20 @@ pub struct UnsubAckPacket {
 }
 
 impl Packet {
-    pub fn decode(buf: &mut BytesMut) -> Result<Option<Packet>, PacketError> {
-        if buf.len() < 2 {
-            return Ok(None);
-        }
-
-        let mut cursor = Cursor::new(&buf[..]);
-        
-        let first_byte = cursor.get_u8();
+    pub async fn decode<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Packet, PacketError> {
+        // Read fixed header
+        let first_byte = reader.read_u8().await?;
         let packet_type = PacketType::try_from((first_byte >> 4) & 0x0F)?;
         let flags = first_byte & 0x0F;
 
-        let remaining_length = match decode_remaining_length(&mut cursor) {
-            Ok(len) => len,
-            Err(PacketError::IncompletePacket) => return Ok(None),
-            Err(e) => return Err(e),
-        };
+        // Read remaining length
+        let remaining_length = decode_remaining_length_async(reader).await?;
 
-        let header_len = cursor.position() as usize;
-        let total_len = header_len + remaining_length as usize;
-
-        if buf.len() < total_len {
-            return Ok(None);
-        }
-
-        let packet_buf = buf.split_to(total_len);
-        let mut payload_cursor = Cursor::new(&packet_buf[header_len..]);
+        // Read the remaining packet data
+        let mut packet_data = vec![0u8; remaining_length as usize];
+        reader.read_exact(&mut packet_data).await?;
+        
+        let mut payload_cursor = Cursor::new(&packet_data[..]);
 
         let packet = match packet_type {
             PacketType::Connect => {
@@ -190,7 +179,7 @@ impl Packet {
             _ => return Err(PacketError::InvalidPacketType(packet_type as u8)),
         };
 
-        Ok(Some(packet))
+        Ok(packet)
     }
 
     pub fn encode(&self, buf: &mut BytesMut) {
@@ -206,7 +195,7 @@ impl Packet {
     }
 }
 
-fn decode_remaining_length(cursor: &mut Cursor<&[u8]>) -> Result<u32, PacketError> {
+async fn decode_remaining_length_async<R: AsyncRead + Unpin>(reader: &mut R) -> Result<u32, PacketError> {
     let mut multiplier = 1;
     let mut value = 0;
     let mut byte_count = 0;
@@ -216,11 +205,7 @@ fn decode_remaining_length(cursor: &mut Cursor<&[u8]>) -> Result<u32, PacketErro
             return Err(PacketError::InvalidRemainingLength);
         }
 
-        if cursor.remaining() == 0 {
-            return Err(PacketError::IncompletePacket);
-        }
-
-        let byte = cursor.get_u8();
+        let byte = reader.read_u8().await?;
         value += (byte & 0x7F) as u32 * multiplier;
 
         if (byte & 0x80) == 0 {

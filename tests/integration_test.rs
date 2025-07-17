@@ -7,7 +7,9 @@ use tokio::time::timeout;
 async fn test_basic_connect_and_disconnect() {
     // Start server in background
     let server_handle = tokio::spawn(async {
-        let server = iothub::server::IoTHub::new("127.0.0.1:18831".to_string()).await.unwrap();
+        let mut config = iothub::config::Config::default();
+        config.server.listen_addresses.push("tcp://127.0.0.1:18831".to_string());
+        let server = iothub::server::Server::new(&config);
         server.run().await.unwrap();
     });
 
@@ -62,7 +64,9 @@ async fn test_basic_connect_and_disconnect() {
 async fn test_publish_subscribe() {
     // Start server in background
     let server_handle = tokio::spawn(async {
-        let server = iothub::server::IoTHub::new("127.0.0.1:18832".to_string()).await.unwrap();
+        let mut config = iothub::config::Config::default();
+        config.server.listen_addresses.push("tcp://127.0.0.1:18832".to_string());
+        let server = iothub::server::Server::new(&config);
         server.run().await.unwrap();
     });
 

@@ -96,7 +96,7 @@ impl Server {
             return Err(anyhow::anyhow!("Server is in drain mode, rejecting new session"));
         }
 
-        let client_id = session.client_id().to_string();
+        let client_id = session.client_id().await;
         let session_id = session.session_id().to_string();
         
         // Handle client ID conflicts using atomic swap
