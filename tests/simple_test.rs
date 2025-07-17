@@ -10,7 +10,7 @@ async fn test_simple_connect() {
         let mut config = iothub::config::Config::default();
         config.server.listen_addresses.push("tcp://127.0.0.1:18833".to_string());
         let server = iothub::server::Server::new(&config);
-        server.run().await.unwrap();
+        server.run().await;
     });
 
     // Give server time to start

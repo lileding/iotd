@@ -1,24 +1,27 @@
 use crate::transport::AsyncStream;
 use crate::server::Server;
+use crate::broker::Broker;
 use crate::protocol::packet::Packet;
 use anyhow::Result;
 use std::sync::Arc;
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{mpsc, Notify, RwLock};
+use tokio::sync::{mpsc, RwLock};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use uuid::Uuid;
 
 pub struct Session {
-    session_id: String,
-    client_id: RwLock<String>,
+    session_id: RwLock<String>,
     clean_session: bool,
     keep_alive: u16,
     stream: RwLock<Box<dyn AsyncStream>>,
     server: Arc<Server>,
-    shutdown: Arc<Notify>,
-    completed: Arc<Notify>,
-    connected: RwLock<bool>,
+    broker: Arc<Broker>,
+    shutdown_token: CancellationToken,
+    completed_token: CancellationToken,
+    connected: AtomicBool,
     message_rx: RwLock<Option<mpsc::Receiver<bytes::Bytes>>>,
     message_tx: mpsc::Sender<bytes::Bytes>,
 }
@@ -27,44 +30,49 @@ impl Session {
     pub fn new(
         stream: Box<dyn AsyncStream>,
         server: Arc<Server>,
+        broker: Arc<Broker>,
     ) -> Arc<Self> {
-        let session_id = Uuid::new_v4().to_string();
-        let client_id = format!("__anon_{}", session_id);
+        let uuid = Uuid::new_v4().to_string();
+        let session_id = format!("__anon_{}", uuid);
         let (message_tx, message_rx) = mpsc::channel(1000);
         
         Arc::new(Self {
-            session_id,
-            client_id: RwLock::new(client_id),
+            session_id: RwLock::new(session_id),
             clean_session: true,
             keep_alive: 0,
             stream: RwLock::new(stream),
             server: Arc::clone(&server),
-            shutdown: Arc::new(Notify::new()),
-            completed: Arc::new(Notify::new()),
-            connected: RwLock::new(false),
+            broker: Arc::clone(&broker),
+            shutdown_token: CancellationToken::new(),
+            completed_token: CancellationToken::new(),
+            connected: AtomicBool::new(false),
             message_rx: RwLock::new(Some(message_rx)),
             message_tx,
         })
     }
 
-    pub fn session_id(&self) -> &str {
-        &self.session_id
-    }
-
-    pub async fn client_id(&self) -> String {
-        self.client_id.read().await.clone()
+    pub async fn session_id(&self) -> String {
+        self.session_id.read().await.clone()
     }
 
     pub fn message_sender(&self) -> mpsc::Sender<bytes::Bytes> {
         self.message_tx.clone()
     }
 
-    pub async fn run(self: Arc<Self>) -> Result<()> {
-        info!("Session {} starting", self.session_id);
+    pub async fn run(self: Arc<Self>) {
+        let session_id = self.session_id().await;
+        info!("Session {} starting", session_id);
 
         // Get the message receiver
-        let mut message_rx = self.message_rx.write().await.take()
-            .ok_or_else(|| anyhow::anyhow!("Message receiver already taken"))?;
+        let message_rx_result = self.message_rx.write().await.take();
+        let mut message_rx = match message_rx_result {
+            Some(rx) => rx,
+            None => {
+                error!("Message receiver already taken for session {}", session_id);
+                self.cleanup_and_exit().await;
+                return;
+            }
+        };
 
         // Session handling loop
         loop {
@@ -74,12 +82,12 @@ impl Session {
                     match result {
                         Ok(should_continue) => {
                             if !should_continue {
-                                info!("Session {} ending normally", self.session_id);
+                                info!("Session {} ending normally", session_id);
                                 break;
                             }
                         }
                         Err(e) => {
-                            error!("Session {} error: {}", self.session_id, e);
+                            error!("Session {} error: {}", session_id, e);
                             break;
                         }
                     }
@@ -88,36 +96,46 @@ impl Session {
                 // Handle messages from subscribed topics
                 Some(message) = message_rx.recv() => {
                     if let Err(e) = self.handle_message(message).await {
-                        error!("Failed to handle message for session {}: {}", self.session_id, e);
+                        error!("Failed to handle message for session {}: {}", session_id, e);
                     }
                 }
                 
                 // Handle shutdown signal
-                _ = self.shutdown.notified() => {
-                    info!("Session {} shutting down", self.session_id);
+                _ = self.shutdown_token.cancelled() => {
+                    info!("Session {} shutting down", session_id);
                     break;
                 }
             }
         }
 
-        // Cleanup: unregister session from server
-        self.server.unregister_session(&self.session_id).await;
+        // Cleanup and exit
+        self.cleanup_and_exit().await;
+        info!("Session {} completed", session_id);
+    }
+
+    async fn cleanup_and_exit(self: &Arc<Self>) {
+        let session_id = self.session_id().await;
+        
+        // Remove from half-connected sessions only if not connected yet
+        if !self.connected.load(Ordering::Acquire) {
+            self.broker.remove_half_connected_session(&session_id).await;
+        }
+        
+        // Unregister from server
+        self.server.unregister_session(&session_id).await;
         
         // Close the stream
         if let Err(e) = self.stream.write().await.close().await {
-            error!("Failed to close stream for session {}: {}", self.session_id, e);
+            error!("Failed to close stream for session {}: {}", session_id, e);
         }
 
         // Send completed notification
-        self.completed.notify_waiters();
-
-        info!("Session {} completed", self.session_id);
-        Ok(())
+        self.completed_token.cancel();
     }
 
     pub async fn shutdown(&self) {
-        self.shutdown.notify_waiters();
-        self.completed.notified().await;
+        self.shutdown_token.cancel();
+        self.completed_token.cancelled().await;
     }
 
     async fn handle_client_packet(self: &Arc<Self>) -> Result<bool> {
@@ -139,7 +157,8 @@ impl Session {
                         return Ok(false); // End session
                     }
                     _ => {
-                        error!("Unhandled packet type for session {}", self.session_id);
+                        let session_id = self.session_id().await;
+                        error!("Unhandled packet type for session {}", session_id);
                     }
                 }
             }
@@ -147,11 +166,13 @@ impl Session {
                 // Check if this is a connection closed error
                 if let Some(io_error) = e.source().and_then(|e| e.downcast_ref::<std::io::Error>()) {
                     if io_error.kind() == std::io::ErrorKind::UnexpectedEof {
-                        info!("Client {} closed connection", self.session_id);
+                        let session_id = self.session_id().await;
+                        info!("Client {} closed connection", session_id);
                         return Ok(false);
                     }
                 }
-                error!("Packet decoding error for session {}: {}", self.session_id, e);
+                let session_id = self.session_id().await;
+                error!("Packet decoding error for session {}: {}", session_id, e);
                 return Err(e.into());
             }
         }
@@ -160,19 +181,18 @@ impl Session {
     }
 
     async fn handle_connect(self: &Arc<Self>, packet: crate::protocol::packet::ConnectPacket) -> Result<()> {
-        info!("CONNECT received for session {}: client_id={}, clean_session={}", self.session_id, packet.client_id, packet.clean_session);
+        info!("CONNECT received: client_id={}, clean_session={}", packet.client_id, packet.clean_session);
 
-        // Update client_id if provided
+        let old_session_id = self.session_id().await;
+
+        // Update sessionId if clientId is provided
         if !packet.client_id.is_empty() {
-            let formatted_client_id = format!("__client_{}", packet.client_id);
-            *self.client_id.write().await = formatted_client_id;
+            let new_session_id = format!("__client_{}", packet.client_id);
+            *self.session_id.write().await = new_session_id;
         }
 
         // Set connected flag
-        *self.connected.write().await = true;
-
-        // Register session with server
-        self.server.register_session(Arc::clone(self)).await?;
+        self.connected.store(true, Ordering::Release);
 
         // Send CONNACK response
         let connack = crate::protocol::packet::ConnAckPacket {
@@ -182,17 +202,26 @@ impl Session {
         let mut buf = bytes::BytesMut::new();
         Packet::ConnAck(connack).encode(&mut buf);
         self.stream.write().await.write_all(&buf).await?;
+
+        // Remove from half-connected sessions before registering with server
+        self.broker.remove_half_connected_session(&old_session_id).await;
+
+        // Register session with server after CONNACK is sent
+        self.server.register_session(Arc::clone(self)).await?;
+
         Ok(())
     }
 
     async fn handle_publish(&self, packet: crate::protocol::packet::PublishPacket) -> Result<()> {
         // Check if connected
-        if !*self.connected.read().await {
-            error!("PUBLISH received for session {} but not connected", self.session_id);
+        if !self.connected.load(Ordering::Acquire) {
+            let session_id = self.session_id().await;
+            error!("PUBLISH received for session {} but not connected", session_id);
             return Ok(());
         }
 
-        info!("PUBLISH received for session {}: topic={}, qos={:?}", self.session_id, packet.topic, packet.qos);
+        let session_id = self.session_id().await;
+        info!("PUBLISH received for session {}: topic={}, qos={:?}", session_id, packet.topic, packet.qos);
         // Here you would route the message through the server's router
         // self.server.route_message(packet).await?;
         Ok(())
@@ -200,12 +229,14 @@ impl Session {
 
     async fn handle_subscribe(&self, packet: crate::protocol::packet::SubscribePacket) -> Result<()> {
         // Check if connected
-        if !*self.connected.read().await {
-            error!("SUBSCRIBE received for session {} but not connected", self.session_id);
+        if !self.connected.load(Ordering::Acquire) {
+            let session_id = self.session_id().await;
+            error!("SUBSCRIBE received for session {} but not connected", session_id);
             return Ok(());
         }
 
-        info!("SUBSCRIBE received for session {}: topics={:?}", self.session_id, packet.topic_filters);
+        let session_id = self.session_id().await;
+        info!("SUBSCRIBE received for session {}: topics={:?}", session_id, packet.topic_filters);
         // Handle subscription logic and send SUBACK
         let suback = crate::protocol::packet::SubAckPacket {
             packet_id: packet.packet_id,
@@ -219,12 +250,14 @@ impl Session {
 
     async fn handle_pingreq(&self) -> Result<()> {
         // Check if connected
-        if !*self.connected.read().await {
-            error!("PINGREQ received for session {} but not connected", self.session_id);
+        if !self.connected.load(Ordering::Acquire) {
+            let session_id = self.session_id().await;
+            error!("PINGREQ received for session {} but not connected", session_id);
             return Ok(());
         }
 
-        info!("PINGREQ received for session {}", self.session_id);
+        let session_id = self.session_id().await;
+        info!("PINGREQ received for session {}", session_id);
         let pingresp = Packet::PingResp;
         let mut buf = bytes::BytesMut::new();
         pingresp.encode(&mut buf);
@@ -234,12 +267,14 @@ impl Session {
 
     async fn handle_unsubscribe(&self, packet: crate::protocol::packet::UnsubscribePacket) -> Result<()> {
         // Check if connected
-        if !*self.connected.read().await {
-            error!("UNSUBSCRIBE received for session {} but not connected", self.session_id);
+        if !self.connected.load(Ordering::Acquire) {
+            let session_id = self.session_id().await;
+            error!("UNSUBSCRIBE received for session {} but not connected", session_id);
             return Ok(());
         }
 
-        info!("UNSUBSCRIBE received for session {}: topics={:?}", self.session_id, packet.topic_filters);
+        let session_id = self.session_id().await;
+        info!("UNSUBSCRIBE received for session {}: topics={:?}", session_id, packet.topic_filters);
         // Handle unsubscription logic and send UNSUBACK
         let unsuback = crate::protocol::packet::UnsubAckPacket {
             packet_id: packet.packet_id,
@@ -251,15 +286,17 @@ impl Session {
     }
 
     async fn handle_disconnect(&self) -> Result<()> {
-        info!("DISCONNECT received for session {}", self.session_id);
-        // Notify shutdown
-        self.shutdown.notify_waiters();
+        let session_id = self.session_id().await;
+        info!("DISCONNECT received for session {}", session_id);
+        // Cancel the session
+        self.shutdown_token.cancel();
         Ok(())
     }
 
     async fn handle_message(&self, message: bytes::Bytes) -> Result<()> {
         // Forward the message and encode it as a packet to AsyncWrite of the stream
-        info!("Forwarding message to session {}", self.session_id);
+        let session_id = self.session_id().await;
+        info!("Forwarding message to session {}", session_id);
         self.stream.write().await.write_all(&message).await?;
         Ok(())
     }

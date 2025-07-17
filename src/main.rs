@@ -1,7 +1,9 @@
 use anyhow::Result;
 use iothub::config::{Config, ServerConfig, AuthConfig, StorageConfig, LoggingConfig};
 use iothub::server::Server;
-use tracing::{info, Level};
+use std::sync::Arc;
+use tokio::signal;
+use tracing::{info, warn, Level};
 use tracing_subscriber;
 
 #[tokio::main]
@@ -26,7 +28,44 @@ async fn main() -> Result<()> {
         logging: LoggingConfig::default(),
     };
     let server = Server::new(&config);
-    server.run().await?;
+    let server_clone = Arc::clone(&server);
+    
+    // Spawn server task
+    let server_handle = tokio::spawn(async move {
+        server_clone.run().await;
+    });
+    
+    // Handle UNIX signals
+    tokio::select! {
+        // SIGINT (Ctrl+C) - graceful shutdown
+        _ = signal::ctrl_c() => {
+            info!("Received SIGINT, initiating graceful shutdown...");
+            server.shutdown().await;
+            info!("Graceful shutdown completed");
+        }
+        
+        // SIGTERM - immediate quit
+        _ = async {
+            #[cfg(unix)]
+            {
+                let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate()).unwrap();
+                sigterm.recv().await
+            }
+            #[cfg(not(unix))]
+            {
+                // On non-Unix systems, just wait forever (SIGTERM not available)
+                std::future::pending::<()>().await
+            }
+        } => {
+            warn!("Received SIGTERM, quitting immediately");
+            std::process::exit(0);
+        }
+        
+        // Server completed normally
+        _ = server_handle => {
+            info!("Server completed normally");
+        }
+    }
 
     Ok(())
 }

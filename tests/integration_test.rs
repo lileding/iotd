@@ -10,7 +10,7 @@ async fn test_basic_connect_and_disconnect() {
         let mut config = iothub::config::Config::default();
         config.server.listen_addresses.push("tcp://127.0.0.1:18831".to_string());
         let server = iothub::server::Server::new(&config);
-        server.run().await.unwrap();
+        server.run().await;
     });
 
     // Connect with retry
@@ -67,7 +67,7 @@ async fn test_publish_subscribe() {
         let mut config = iothub::config::Config::default();
         config.server.listen_addresses.push("tcp://127.0.0.1:18832".to_string());
         let server = iothub::server::Server::new(&config);
-        server.run().await.unwrap();
+        server.run().await;
     });
 
     // Give server time to start
