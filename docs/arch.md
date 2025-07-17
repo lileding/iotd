@@ -2,7 +2,7 @@
 
 ## Overview
 
-IoTHub is a high-performance MQTT server implemented in Rust using Tokio for asynchronous I/O. The architecture features a Server → Broker → Session hierarchy designed for scalability, reliability, and extensibility. The current implementation (Stone 2) introduces multi-broker support, graceful shutdown, session management with unique sessionId, and transport abstraction for future protocol support.
+IoTHub is a high-performance MQTT server implemented in Rust using Tokio for asynchronous I/O. The architecture features a Server → Broker → Session hierarchy designed for scalability, reliability, and extensibility with event-driven design and race-condition-free shutdown using CancellationToken.
 
 ## Core Architecture
 
@@ -16,22 +16,19 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio for asy
 │  └─────────────┘  └─────────────┘  └─────────────┘        │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────────┤
-│  │                   Sessions                              │
+│  │              Sessions (by sessionId)                    │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
 │  │  │  Session    │  │  Session    │  │  Session    │    │
-│  │  │ (Client A)  │  │ (Client B)  │  │ (Client C)  │    │
+│  │  │ (sessionId) │  │ (sessionId) │  │ (sessionId) │    │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘    │
 │  └─────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────────────────────────────────────────────────┤
 │  │                    Router                               │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
-│  │  │Topic Filter │  │Topic Filter │  │Topic Filter │    │
-│  │  │ → Sessions  │  │ → Sessions  │  │ → Sessions  │    │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘    │
+│  │           (Routes by sessionId internally)              │
 │  └─────────────────────────────────────────────────────────┤
 │                                                             │
-│  Config • Auth • Storage • Metrics                         │
+│  Config • Transport • Shutdown Management                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -45,11 +42,11 @@ The `Server` is the central orchestrator that manages all components and provide
 pub struct Server {
     config: Config,
     brokers: DashMap<String, Arc<Broker>>,
-    sessions: Mutex<DashMap<String, Arc<Session>>>, // clientId -> Session
+    sessions: DashMap<String, Arc<Session>>, // sessionId -> Session
     router: Router,
     draining: RwLock<bool>,
-    shutdown: Arc<Notify>,
-    completed: Arc<Notify>,
+    shutdown_token: CancellationToken,
+    completed_token: CancellationToken,
 }
 ```
 
@@ -57,34 +54,36 @@ pub struct Server {
 - Manages broker lifecycle and spawning
 - Handles session registration and conflict resolution
 - Provides unified API for session operations
-- Coordinates graceful shutdown
+- Coordinates graceful shutdown with CancellationToken
 - Manages cross-cutting concerns (auth, metrics, logging)
 
 **Key Methods:**
 - `new(config: &Config) -> Arc<Self>` - Creates new server instance
-- `run(self: Arc<Self>) -> Result<()>` - Starts all brokers and waits for shutdown
+- `run(self: Arc<Self>)` - Starts all brokers and waits for shutdown
 - `shutdown(&self)` - Initiates graceful shutdown with drain mode
 - `register_session(session: Arc<Session>) -> Result<()>` - Registers new session with conflict resolution
-- `unregister_session(session_id: &str)` - Removes session on disconnect
+- `unregister_session(session_id: &str)` - Removes session on disconnect (thread-safe)
 
 ### 2. Broker
 
 A `Broker` represents a network listener for a specific protocol and address.
 
 ```rust
-struct Broker {
+pub struct Broker {
     bind_address: String,
     server: Arc<Server>,
-    shutdown: Arc<Notify>,
-    completed: Arc<Notify>,
+    shutdown_token: CancellationToken,
+    completed_token: CancellationToken,
+    half_connected_sessions: Mutex<HashMap<String, Arc<Session>>>,
 }
 ```
 
 **Responsibilities:**
 - Listens for incoming connections on specific transport
 - Accepts new connections and creates sessions
+- Tracks half-connected sessions until CONNECT received
 - Handles protocol-specific connection setup
-- Responds to shutdown signals
+- Responds to shutdown signals via CancellationToken
 
 **Supported Protocols:**
 - `tcp://` - Plain TCP connections (implemented)
@@ -95,10 +94,10 @@ struct Broker {
 
 **Lifecycle:**
 1. Initialize listener for protocol/address
-2. Spawn async task with infinite loop
+2. Spawn async task with event loop
 3. Select between accept() and shutdown signal
-4. On accept: create new session and spawn task
-5. On shutdown: close listener and exit loop
+4. On accept: create new session, track as half-connected, spawn task
+5. On shutdown: close listener, cleanup half-connected sessions, exit
 
 ### 3. Session
 
@@ -106,50 +105,66 @@ A `Session` represents a connected IoT client and manages its entire lifecycle.
 
 ```rust
 pub struct Session {
-    session_id: String,
-    client_id: String,
+    session_id: RwLock<String>,
     clean_session: bool,
     keep_alive: u16,
     stream: RwLock<Box<dyn AsyncStream>>,
     server: Arc<Server>,
-    shutdown: Arc<Notify>,
-    completed: Arc<Notify>,
+    broker: Arc<Broker>,
+    shutdown_token: CancellationToken,
+    completed_token: CancellationToken,
+    connected: AtomicBool,
+    message_rx: RwLock<Option<mpsc::Receiver<bytes::Bytes>>>,
+    message_tx: mpsc::Sender<bytes::Bytes>,
 }
 ```
 
 **Responsibilities:**
-- Generates unique sessionId for internal routing
-- Handles MQTT protocol packets (CONNECT, PUBLISH, SUBSCRIBE, etc.)
+- Manages sessionId lifecycle: `__anon_$uuid` → `__client_$clientId`
+- Handles MQTT protocol packets with stream deadlock prevention
 - Manages session state and client connection
-- Provides default client ID (`"__iothub_{sessionId}"`) if not provided
 - Handles session cleanup on disconnect
 - Registers/unregisters with server for session management
 
 **Lifecycle:**
-1. **Connection**: Process CONNECT packet
-2. **Authentication**: Validate client credentials
-3. **Registration**: Register with server (handles client ID conflicts)
-4. **Authorization**: Check topic permissions
-5. **Message Processing**: Enter main event loop
-6. **Cleanup**: Unregister subscriptions and close connection
+1. **Creation**: Generate anonymous sessionId and track as half-connected
+2. **Connection**: Process CONNECT packet, update sessionId if clientId provided
+3. **Registration**: Register with server after CONNACK sent
+4. **Message Processing**: Enter main event loop with tokio::select!
+5. **Cleanup**: Remove from half-connected (if needed), unregister from server, close stream
 
 **Event Loop:**
 ```rust
 loop {
     tokio::select! {
         // Handle incoming MQTT packets
-        packet = self.read_packet() => {
-            self.process_packet(packet?).await?;
+        result = self.handle_client_packet() => {
+            match result {
+                Ok(should_continue) => if !should_continue { break; },
+                Err(e) => { error!("Session error: {}", e); break; }
+            }
         }
         // Handle subscription messages from router
-        msg = self.subscription_rx.recv() => {
-            self.send_message(msg?).await?;
+        Some(message) = message_rx.recv() => {
+            if let Err(e) = self.handle_message(message).await {
+                error!("Failed to handle message: {}", e);
+                break; // Terminate on message delivery failure
+            }
         }
         // Handle shutdown signal
-        _ = self.shutdown_rx.recv() => break,
+        _ = self.shutdown_token.cancelled() => {
+            info!("Session shutting down");
+            break;
+        }
     }
 }
 ```
+
+**Key Design Features:**
+- **Stream passing**: Packet handlers receive stream reference to prevent deadlocks
+- **Atomic connected flag**: Uses `AtomicBool` for performance
+- **Half-connected tracking**: Removed only if connection never completed
+- **Error handling**: Message delivery failures terminate session
 
 ### 4. Router
 
@@ -231,10 +246,10 @@ pub trait AsyncStream: Send + Sync {
 
 ### Thread Safety
 - **Server**: Shared via `Arc<Server>` across all components
-- **Sessions**: Stored in `Mutex<DashMap<String, Arc<Session>>>` (clientId -> Session)
+- **Sessions**: Stored in `DashMap<String, Arc<Session>>` (sessionId -> Session)
 - **Brokers**: Stored in `DashMap<String, Arc<Broker>>` (address -> Broker)
 - **Router**: Thread-safe operations for session management
-- **Shutdown**: Coordinated via `Arc<Notify>` for graceful shutdown
+- **Shutdown**: Coordinated via `CancellationToken` for race-condition-free shutdown
 
 ### Async Tasks
 - **Server**: Main coordinator, spawns broker tasks
@@ -243,29 +258,57 @@ pub trait AsyncStream: Send + Sync {
 - **Router**: Embedded in server, no separate task
 
 ### Message Passing
-- **Shutdown Signals**: `Arc<Notify>` for graceful shutdown coordination
+- **Shutdown Signals**: `CancellationToken` for graceful shutdown coordination
 - **Session Management**: Direct async method calls between components
 - **Inter-component Communication**: Server as central message hub
 
-## Error Handling
+## Key Design Decisions
 
-```rust
-#[derive(Error, Debug)]
-pub enum ServerError {
-    #[error("Broker error: {0}")]
-    Broker(#[from] BrokerError),
-    #[error("Session error: {0}")]
-    Session(#[from] SessionError),
-    #[error("Router error: {0}")]
-    Router(#[from] RouterError),
-    #[error("Protocol error: {0}")]
-    Protocol(#[from] ProtocolError),
-    #[error("Authentication error: {0}")]
-    Auth(#[from] AuthError),
-    #[error("Storage error: {0}")]
-    Storage(#[from] StorageError),
-}
-```
+### 1. CancellationToken Architecture
+- **Problem**: `Notify` had race conditions where shutdown could be missed
+- **Solution**: `CancellationToken` maintains state, eliminates race conditions
+- **Implementation**: Used throughout Server, Broker, Session for consistent shutdown
+
+### 2. Half-connected Session Tracking
+- **Problem**: Sessions need cleanup even if CONNECT never received
+- **Solution**: Track sessions in broker until CONNECT, then move to server
+- **Implementation**: Mutex-protected HashMap with lock-based swap for cleanup
+
+### 3. Stream Deadlock Prevention
+- **Problem**: Packet handlers acquiring stream lock while already held
+- **Solution**: Pass stream reference to packet handlers
+- **Implementation**: Handlers accept `&mut dyn AsyncStream` parameter
+
+### 4. SessionId Management
+- **Problem**: Client ID conflicts and routing complexity
+- **Solution**: Internal sessionId separate from MQTT clientId
+- **Implementation**: `__anon_$uuid` → `__client_$clientId` on CONNECT
+
+### 5. Thread-safe Cleanup
+- **Problem**: Concurrent access to session collections during shutdown
+- **Solution**: Lock-based swap pattern with DashMap
+- **Implementation**: Clone map, clear original, iterate over clone
+
+## Development Status (Milestone 1)
+
+### ✅ Completed
+- Event-driven architecture with tokio::select!
+- Race-condition-free shutdown using CancellationToken
+- Half-connected session tracking and cleanup
+- Stream deadlock prevention in packet handlers
+- UNIX signal handling (SIGINT graceful, SIGTERM immediate)
+- Basic MQTT v3.1.1 packet handling (CONNECT, CONNACK, PUBLISH tested)
+- Session lifecycle management with proper cleanup
+
+### 🔄 In Progress
+- Testing all packet types (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
+
+### ❌ Missing for Milestone 1
+- Message routing system (biggest gap)
+- Clean session logic
+- Retained messages
+- Will messages
+- Keep-alive mechanism
 
 ## Performance Characteristics
 
@@ -330,4 +373,4 @@ pub enum ServerError {
 - Custom transport implementations
 - Protocol version negotiation
 
-This architecture provides a solid foundation for building a production-ready MQTT broker that can scale to handle thousands of concurrent connections while maintaining high performance and reliability.
+This architecture provides a solid foundation for building a production-ready MQTT broker that can scale to handle thousands of concurrent connections while maintaining high performance and reliability through careful concurrency design and race-condition-free shutdown mechanisms.

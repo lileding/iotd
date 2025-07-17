@@ -2,236 +2,143 @@
 
 ## Overview
 
-IoTHub development follows a progressive "stone" approach, where each stone builds upon the previous one, adding new features while maintaining backward compatibility. This incremental approach ensures a stable foundation while continuously expanding capabilities.
+IoTHub development follows a progressive milestone approach, where each milestone builds upon the previous one, adding new features while maintaining backward compatibility. This incremental approach ensures a stable foundation while continuously expanding capabilities.
 
-## Development Phases
+## Development Milestones
 
-### Stone 1: Foundation ✅ **COMPLETED**
-**Target**: Basic MQTT v3.1.1 pub/sub functionality
+### Milestone 1: Full MQTTv3 Server (QoS=0, no persistency/auth) 🔄 **IN PROGRESS**
+**Target**: Complete MQTT v3.1.1 server with QoS=0 support
 
-**Features Implemented:**
-- ✅ Basic TCP broker with single listener
-- ✅ CONNECT/CONNACK packet handling
-- ✅ PUBLISH/SUBSCRIBE/UNSUBSCRIBE packet processing
-- ✅ QoS 0 (At most once) message delivery
-- ✅ Topic wildcards (`+` and `#` patterns)
-- ✅ Retained messages
-- ✅ Clean session support
-- ✅ PING/PONG keep-alive mechanism
-- ✅ Basic session management
-- ✅ Integration tests and unit tests
-
-**Architecture:**
-- Single-threaded broker
-- Basic HashMap-based session storage
-- Linear topic matching
-- No authentication or authorization
-
-**Status**: ✅ **Complete** - Basic functionality working with tests passing
-
----
-
-### Stone 2: Enhanced Reliability ✅ **COMPLETED**
-**Target**: Graceful shutdown and architectural improvements
-
-**Features Implemented:**
-- ✅ Architecture refactoring to Server → Broker → Session hierarchy
-- ✅ Multi-broker support with graceful shutdown
-- ✅ Proper session lifecycle management with unique sessionId
-- ✅ Enhanced error handling and logging
-- ✅ Client ID conflict resolution with atomic session swapping
-- ✅ Connection draining on shutdown with drain mode
+**✅ Completed Features:**
+- ✅ Event-driven architecture with tokio::select! based packet handling
+- ✅ Race-condition-free shutdown using CancellationToken across all components
+- ✅ Half-connected session tracking with proper cleanup
+- ✅ Stream deadlock prevention in packet handlers
+- ✅ UNIX signal handling (SIGINT graceful shutdown, SIGTERM immediate exit)
+- ✅ Multi-broker architecture with Server → Broker → Session hierarchy
+- ✅ Session management with sessionId lifecycle (`__anon_$uuid` → `__client_$clientId`)
+- ✅ Thread-safe operations using DashMap and Arc
 - ✅ Transport abstraction layer for multiple protocols
 - ✅ Comprehensive configuration system with TOML support
-- ✅ Thread-safe session management with DashMap and Arc
+- ✅ Basic MQTT v3.1.1 packet handling (CONNECT, CONNACK, PUBLISH tested)
 
-**Architecture Changes:**
-- ✅ Refactored to Server → Broker → Session hierarchy
-- ✅ Added graceful shutdown signaling with Arc<Notify>
-- ✅ Implemented proper session registration/cleanup
-- ✅ Added transport abstraction layer
-- ✅ Session map uses clientId as key, Router uses sessionId internally
-- ✅ Default client ID format: "__iothub_{sessionId}"
+**🔄 In Progress:**
+- 🔄 **Current**: Test all packet types (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
 
-**Timeline**: Completed
-**Success Criteria**: 
-- ✅ Server can handle multiple brokers
-- ✅ Graceful shutdown works with connection draining
-- ✅ Client ID conflicts resolved automatically
-- ✅ Architecture supports future protocol extensions
+**❌ Missing Core Features:**
+- ❌ **Message routing system** (biggest gap - route PUBLISH to subscribers)
+- ❌ Clean session logic (handle `clean_session=false`)
+- ❌ Retained messages (store and deliver to new subscribers)
+- ❌ Will messages (store on CONNECT, deliver on abnormal disconnect)
+- ❌ Keep-alive mechanism (monitor timeouts, cleanup expired sessions)
+- ❌ Protocol compliance (proper error codes, client ID validation)
 
-**Next Phase**: Last Will and Testament (LWT) messages (deferred to Stone 3)
+**Architecture Status:**
+- ✅ CancellationToken-based shutdown eliminates race conditions
+- ✅ Half-connected session tracking until CONNECT received
+- ✅ Stream passing to packet handlers prevents deadlocks
+- ✅ Thread-safe cleanup using lock-based swap pattern
+- ✅ Atomic operations for performance optimization
+
+**Timeline**: 4-6 weeks remaining
+**Success Criteria**:
+- [ ] All MQTT v3.1.1 packet types working
+- [ ] Message routing between clients functional
+- [ ] Clean session behavior implemented
+- [ ] Retained and will messages working
+- [ ] Keep-alive timeouts handled
+- [ ] Full protocol compliance
 
 ---
 
-### Stone 3: Quality of Service 📋 **PLANNED**
-**Target**: QoS 1, Last Will and Testament, and enhanced retained message handling
+### Milestone 2: QoS=1 Support (in-memory) 📋 **PLANNED**
+**Target**: QoS=1 message delivery with in-memory persistence
 
 **Features to Implement:**
-- 📋 Last Will and Testament (LWT) messages (moved from Stone 2)
-- 📋 QoS 1 (At least once) message delivery
+- 📋 QoS=1 (At least once) message delivery
 - 📋 Message acknowledgment (PUBACK) handling
-- 📋 Message retransmission logic
-- 📋 Enhanced retained message storage
+- 📋 Message retransmission logic with exponential backoff
 - 📋 Packet identifier management
-- 📋 Session state persistence for QoS 1
-- 📋 Router implementation with sessionId-based routing
+- 📋 In-memory message persistence for unacknowledged messages
+- 📋 Duplicate message detection and handling
+- 📋 Session state management for QoS=1
 
 **Technical Challenges:**
-- Message deduplication
+- Message deduplication algorithms
 - Retry logic with exponential backoff
-- Persistent storage for unacknowledged messages
-- Session state recovery
+- In-memory storage for unacknowledged messages
+- Session state recovery on reconnection
+- Performance under high QoS=1 load
 
 **Timeline**: 6-8 weeks
 **Success Criteria**:
-- [ ] QoS 1 messages are delivered at least once
+- [ ] QoS=1 messages delivered at least once
 - [ ] Proper handling of duplicate messages
-- [ ] Retained messages survive server restarts
+- [ ] Message retransmission on timeout
 - [ ] Performance maintained under load
 
 ---
 
-### Stone 4: Guaranteed Delivery 📋 **PLANNED**
-**Target**: QoS 2 (Exactly once) delivery
+### Milestone 3: Basic Persistency & QoS=2 💾 **PLANNED**
+**Target**: Persistent storage interface and QoS=2 support
 
 **Features to Implement:**
-- 📋 QoS 2 (Exactly once) message delivery
-- 📋 Two-phase commit protocol (PUBREC/PUBREL/PUBCOMP)
-- 📋 Message deduplication guarantees
-- 📋 Enhanced session state management
-- 📋 Persistent message queues
+- 💾 Persistent storage interface with pluggable backends
+- 💾 QoS=2 (Exactly once) message delivery
+- 💾 Two-phase commit protocol (PUBREC/PUBREL/PUBCOMP)
+- 💾 Message durability guarantees
+- 💾 Session state persistence
+- 💾 Retained message persistence
+- 💾 File-based and SQLite storage implementations
 
 **Technical Challenges:**
-- Complex state machine for QoS 2 flow
+- Complex state machine for QoS=2 flow
 - Transaction-like message handling
 - Storage consistency guarantees
-- Performance optimization for exact delivery
+- Performance optimization for persistent storage
 
 **Timeline**: 8-10 weeks
 **Success Criteria**:
-- [ ] QoS 2 messages delivered exactly once
-- [ ] No message loss or duplication
-- [ ] Proper handling of connection failures during QoS 2 flow
-- [ ] Acceptable performance impact
+- [ ] QoS=2 messages delivered exactly once
+- [ ] Data survives server restarts
+- [ ] Storage backend configurable
+- [ ] Acceptable performance with persistence
 
 ---
 
-### Stone 5: Security Foundation 🔐 **PLANNED**
-**Target**: Authentication without authorization
+### Milestone 4: Basic Authentication 🔐 **PLANNED**
+**Target**: Config file-based authentication
 
 **Features to Implement:**
 - 🔐 Username/password authentication
-- 🔐 Pluggable authentication backends
+- 🔐 Config file-based user management
 - 🔐 TLS/SSL support for TCP connections
-- 🔐 Client certificate authentication
+- 🔐 Basic client certificate authentication
 - 🔐 Authentication result caching
 - 🔐 Secure configuration management
 
-**Authentication Backends:**
-- Built-in user database
+**Authentication Methods:**
+- Built-in user database (config file)
 - File-based authentication
-- Database authentication (PostgreSQL, MySQL)
-- Future: LDAP, OAuth2, JWT
+- Client certificate authentication
+- Future: Database auth, LDAP, OAuth2
 
 **Timeline**: 6-8 weeks
 **Success Criteria**:
 - [ ] Only authenticated clients can connect
 - [ ] Multiple authentication methods supported
 - [ ] TLS encryption working
-- [ ] Configuration security best practices
+- [ ] Secure configuration practices
 
 ---
 
-### Stone 6: Persistence Layer 💾 **PLANNED**
-**Target**: Pluggable storage with persistence
+### Milestone 5: Enhanced Transport Layer 🔗 **PLANNED**
+**Target**: TLS and multiple transport protocols
 
 **Features to Implement:**
-- 💾 Pluggable storage interface
-- 💾 In-memory storage implementation
-- 💾 File-based persistence
-- 💾 Database persistence (PostgreSQL, SQLite)
-- 💾 Message durability guarantees
-- 💾 Session state persistence
-- 💾 Retained message persistence
-
-**Storage Implementations:**
-- Memory (default, fast, non-persistent)
-- File system (JSON/binary serialization)
-- SQLite (embedded, ACID compliance)
-- PostgreSQL (enterprise, high availability)
-- Future: Redis, MongoDB, custom backends
-
-**Timeline**: 8-10 weeks
-**Success Criteria**:
-- [ ] Storage backend configurable at runtime
-- [ ] Data survives server restarts
-- [ ] Performance acceptable for all backends
-- [ ] Data consistency guarantees
-
----
-
-### Stone 7: Authorization & Access Control 🔒 **PLANNED**
-**Target**: Topic-based authorization
-
-**Features to Implement:**
-- 🔒 Topic-based access control lists (ACLs)
-- 🔒 Per-client permissions
-- 🔒 Wildcard permission matching
-- 🔒 Role-based access control (RBAC)
-- 🔒 Dynamic permission updates
-- 🔒 Audit logging for access decisions
-
-**Permission Types:**
-- Topic read permissions (subscribe)
-- Topic write permissions (publish)
-- Wildcard topic permissions
-- Administrative permissions
-
-**Timeline**: 6-8 weeks
-**Success Criteria**:
-- [ ] Fine-grained topic permissions
-- [ ] Role-based permission management
-- [ ] Audit trail for security events
-- [ ] Performance impact minimized
-
----
-
-### Stone 8: Protocol Extensions 🌐 **PLANNED**
-**Target**: MQTT v5.0 support
-
-**Features to Implement:**
-- 🌐 MQTT v5.0 protocol support
-- 🌐 Enhanced authentication (AUTH packet)
-- 🌐 User properties and metadata
-- 🌐 Subscription options and shared subscriptions
-- 🌐 Message expiry and flow control
-- 🌐 Reason codes and error reporting
-
-**MQTT v5.0 Features:**
-- Enhanced authentication flow
-- User properties for metadata
-- Subscription identifiers
-- Shared subscriptions
-- Message expiry intervals
-- Flow control mechanisms
-
-**Timeline**: 10-12 weeks
-**Success Criteria**:
-- [ ] Full MQTT v5.0 compliance
-- [ ] Backward compatibility with v3.1.1
-- [ ] Performance parity with v3.1.1
-- [ ] All v5.0 features working
-
----
-
-### Stone 9: Multi-Protocol Support 🔗 **PLANNED**
-**Target**: WebSocket and TLS support
-
-**Features to Implement:**
+- 🔗 Enhanced TLS/SSL support
 - 🔗 WebSocket MQTT support (ws://)
 - 🔗 Secure WebSocket support (wss://)
-- 🔗 HTTP/2 MQTT support
 - 🔗 Unix domain socket support
 - 🔗 Protocol negotiation and detection
 - 🔗 Cross-protocol message routing
@@ -242,7 +149,6 @@ IoTHub development follows a progressive "stone" approach, where each stone buil
 - `ws://` - WebSocket over HTTP
 - `wss://` - WebSocket over HTTPS
 - `unix://` - Unix domain sockets
-- `http2://` - HTTP/2 transport
 
 **Timeline**: 8-10 weeks
 **Success Criteria**:
@@ -253,95 +159,104 @@ IoTHub development follows a progressive "stone" approach, where each stone buil
 
 ---
 
-### Stone 10: Enterprise Features 🏢 **PLANNED**
-**Target**: Clustering and high availability
+### Milestone 6: Pluggable Architecture 🔧 **PLANNED**
+**Target**: Pluggable persistence, authentication, and authorization
 
 **Features to Implement:**
-- 🏢 Horizontal clustering support
-- 🏢 Node discovery and health monitoring
-- 🏢 Load balancing and failover
-- 🏢 Distributed session management
-- 🏢 Cross-cluster message routing
-- 🏢 Configuration synchronization
+- 🔧 Pluggable authentication backends
+- 🔧 Pluggable authorization providers
+- 🔧 Pluggable persistence backends
+- 🔧 Topic-based access control lists (ACLs)
+- 🔧 Role-based access control (RBAC)
+- 🔧 Dynamic configuration updates
 
-**Clustering Features:**
-- Automatic node discovery
-- Consistent hashing for session distribution
-- Cross-node message routing
-- Split-brain prevention
-- Rolling updates support
+**Plugin Types:**
+- Authentication: Database, LDAP, OAuth2, JWT
+- Authorization: File-based, database, external APIs
+- Storage: PostgreSQL, MySQL, Redis, MongoDB
+- Metrics: Prometheus, InfluxDB, custom collectors
 
-**Timeline**: 12-16 weeks
+**Timeline**: 10-12 weeks
 **Success Criteria**:
-- [ ] Multiple server instances in cluster
-- [ ] Automatic failover working
-- [ ] Session persistence across failures
-- [ ] Linear scalability demonstrated
+- [ ] Plugin system architecture working
+- [ ] Multiple backend implementations
+- [ ] Runtime plugin loading
+- [ ] Configuration-driven plugin selection
+
+---
+
+### Milestone 7: Production Ready 🏢 **PLANNED**
+**Target**: Enhanced logging, documentation, and production features
+
+**Features to Implement:**
+- 🏢 Enhanced logging and structured metrics
+- 🏢 Comprehensive documentation and examples
+- 🏢 Performance optimization and tuning
+- 🏢 Health checks and monitoring endpoints
+- 🏢 Deployment guides and best practices
+- 🏢 Single-node production deployment
+
+**Production Features:**
+- Prometheus metrics integration
+- Structured logging with JSON output
+- Health check endpoints
+- Configuration validation
+- Performance benchmarking
+- Docker and Kubernetes deployment
+
+**Timeline**: 8-10 weeks
+**Success Criteria**:
+- [ ] Production-ready single-node deployment
+- [ ] Comprehensive monitoring and alerting
+- [ ] Complete documentation
+- [ ] Performance benchmarks validated
 
 ---
 
 ## Version Milestones
 
-### v0.1.0 - Foundation (Stone 1) ✅
-- Basic MQTT v3.1.1 broker
-- QoS 0 messaging
-- Single TCP listener
-- Basic testing
+### v0.1.0 - MQTTv3 Foundation (Milestone 1) 🔄
+- Complete MQTT v3.1.1 server
+- QoS 0 messaging with routing
+- Clean session, retained messages, will messages
+- Keep-alive mechanism
+- Event-driven architecture
 
-### v0.2.0 - Reliability (Stone 2) ✅
-- Multi-broker architecture
-- Graceful shutdown with drain mode
-- Session management with unique sessionId
-- Enhanced error handling and configuration
+### v0.2.0 - Quality of Service (Milestone 2) 📋
+- QoS 1 support with acknowledgments
+- In-memory message persistence
+- Message retransmission logic
+- Duplicate detection
 
-### v0.3.0 - Quality of Service (Stone 3) 📋
-- Last Will and Testament (LWT) messages
-- QoS 1 support
-- Message acknowledgments
-- Retained message improvements
-- Router with sessionId-based routing
-
-### v0.4.0 - Guaranteed Delivery (Stone 4) 📋
-- QoS 2 support
-- Exactly-once delivery
-- Enhanced session management
-- Performance optimizations
-
-### v0.5.0 - Security (Stone 5) 🔐
-- Authentication support
-- TLS/SSL encryption
-- Certificate-based auth
-- Security configuration
-
-### v0.6.0 - Persistence (Stone 6) 💾
-- Pluggable storage
-- Message durability
+### v0.3.0 - Persistence & QoS 2 (Milestone 3) 💾
+- Pluggable storage interface
+- QoS 2 exactly-once delivery
 - Session state persistence
-- Multiple storage backends
+- File and SQLite backends
 
-### v0.7.0 - Authorization (Stone 7) 🔒
-- Topic-based ACLs
-- Role-based permissions
-- Audit logging
-- Dynamic permission updates
+### v0.4.0 - Authentication (Milestone 4) 🔐
+- Username/password authentication
+- TLS/SSL support
+- Client certificate authentication
+- Config-based user management
 
-### v0.8.0 - MQTT v5.0 (Stone 8) 🌐
-- Full MQTT v5.0 support
-- Enhanced authentication
-- User properties
-- Shared subscriptions
-
-### v0.9.0 - Multi-Protocol (Stone 9) 🔗
+### v0.5.0 - Multi-Protocol (Milestone 5) 🔗
 - WebSocket support
 - Multiple transport protocols
 - Cross-protocol routing
 - Browser client support
 
-### v1.0.0 - Enterprise (Stone 10) 🏢
-- Clustering support
-- High availability
-- Load balancing
-- Production-ready
+### v0.6.0 - Pluggable Architecture (Milestone 6) 🔧
+- Plugin system
+- Multiple auth/storage backends
+- Topic-based authorization
+- Dynamic configuration
+
+### v1.0.0 - Production Ready (Milestone 7) 🏢
+- Enhanced monitoring
+- Complete documentation
+- Performance optimization
+- Production deployment ready
 
 ---
 
@@ -378,7 +293,7 @@ IoTHub development follows a progressive "stone" approach, where each stone buil
 - **Compatibility Tests**: Multiple MQTT client libraries
 
 ### Documentation
-- **Architecture Documentation**: Updated each stone
+- **Architecture Documentation**: Updated each milestone
 - **API Documentation**: Comprehensive Rust docs
 - **User Guide**: Installation and configuration
 - **Developer Guide**: Contributing guidelines
@@ -393,22 +308,28 @@ IoTHub development follows a progressive "stone" approach, where each stone buil
 
 ---
 
-## Contributing
+## Key Technical Decisions
 
-### Stone Development
-Each stone follows this process:
-1. **Design Phase**: Architecture review and planning
-2. **Implementation Phase**: Feature development
-3. **Testing Phase**: Comprehensive testing
-4. **Documentation Phase**: Update docs and examples
-5. **Review Phase**: Code review and refinement
-6. **Release Phase**: Beta testing and release
+### Architecture Evolution
+- **Milestone 1**: Focus on correctness and basic functionality
+- **Milestone 2+**: Add complexity incrementally with proper abstractions
+- **Plugin System**: Designed from Milestone 6 for extensibility
+- **Performance**: Optimized throughout with benchmarking
 
-### Getting Involved
-- **Issues**: Report bugs and request features
-- **Pull Requests**: Contribute code improvements
-- **Testing**: Help with beta testing
-- **Documentation**: Improve docs and examples
-- **Community**: Join discussions and provide feedback
+### Design Principles
+- **Event-driven**: tokio::select! for responsive handling
+- **Race-condition-free**: CancellationToken for reliable shutdown
+- **Thread-safe**: DashMap and Arc for concurrent access
+- **Modular**: Clean separation of concerns
+- **Testable**: Comprehensive test coverage
 
-This roadmap provides a clear path toward building a production-ready, enterprise-grade MQTT broker while maintaining stability and performance at each milestone.
+### Technology Choices
+- **Rust**: Memory safety and performance
+- **Tokio**: Async runtime for high concurrency
+- **CancellationToken**: Reliable shutdown coordination
+- **DashMap**: High-performance concurrent HashMap
+- **TOML**: Human-readable configuration
+
+---
+
+This roadmap provides a clear path toward building a production-ready, enterprise-grade MQTT broker while maintaining stability and performance at each milestone. The progressive approach ensures each milestone builds solid foundations for the next.

@@ -100,17 +100,7 @@ impl Broker {
             error!("Failed to close listener: {}", e);
         }
         
-        // Mark as completed
-        self.completed_token.cancel();
-        
-        info!("Broker run() completed");
-    }
-
-    pub async fn shutdown(&self) {
-        // Send shutdown signal
-        self.shutdown_token.cancel();
-        
-        // Atomically swap out the entire half-connected sessions map
+        // Clean up half-connected sessions
         let sessions_to_shutdown = {
             let mut sessions = self.half_connected_sessions.lock().await;
             let temp_map = sessions.clone();
@@ -124,6 +114,16 @@ impl Broker {
         for (_, session) in sessions_to_shutdown {
             session.shutdown().await;
         }
+        
+        // Mark as completed
+        self.completed_token.cancel();
+        
+        info!("Broker run() completed");
+    }
+
+    pub async fn shutdown(&self) {
+        // Send shutdown signal
+        self.shutdown_token.cancel();
         
         // Wait for completion
         self.completed_token.cancelled().await;

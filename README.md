@@ -4,31 +4,64 @@ A high-performance MQTT server implementation in Rust using Tokio, designed for 
 
 ## Features
 
-### Stone 2 (Current) 🔄
-- **Multi-broker architecture** with Server → Broker → Session hierarchy
-- **Graceful shutdown** with connection draining
-- **Session management** with unique sessionId and clientId conflict resolution
+### Current (Milestone 1) 🔄
+- **Event-driven architecture** with tokio::select! based packet handling
+- **Race-condition-free shutdown** using CancellationToken across all components
+- **Session management** with half-connected session tracking and proper cleanup
 - **Transport abstraction** supporting multiple protocols (TCP, WebSocket, TLS)
 - **Thread-safe operations** using DashMap and Arc for concurrent access
-- **Comprehensive configuration** system with TOML support
+- **UNIX signal handling** (SIGINT graceful shutdown, SIGTERM immediate exit)
+- **Basic MQTT v3.1.1 protocol support** with CONNECT/CONNACK/PUBLISH packet handling
 
-### Stone 1 (Completed) ✅
-- Basic pub/sub messaging with QoS level 0
-- MQTT v3.1.1 protocol support
-- Topic wildcards (+ and #)
-- Retained messages
-- Clean session support
-- Basic TCP broker functionality
+### Completed ✅
+- Multi-broker architecture with Server → Broker → Session hierarchy
+- Graceful shutdown with connection draining
+- SessionId management with anonymous and client-based IDs
+- Stream write lock deadlock prevention
+- Comprehensive configuration system with TOML support
 
-### Roadmap
-- **Stone 3**: QoS level 1 and enhanced retained messages
-- **Stone 4**: QoS level 2 support
-- **Stone 5**: Authentication (no authorization)
-- **Stone 6**: Persistence interface with plug-in storage
-- **Stone 7**: Authorization support
-- **Stone 8**: MQTT v5.0 support
-- **Stone 9**: Multi-protocol support (WebSocket, TLS)
-- **Stone 10**: Enterprise features (clustering, high availability)
+## Development Roadmap
+
+### **Milestone 1**: Full MQTTv3 Server (QoS=0, no persistency/auth) 🔄
+- ✅ Basic working architecture
+- ✅ CONNECT, CONNACK, PUBLISH packet handling tested
+- 🔄 **Current**: Test all packet types (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
+- ❌ **Next**: Message routing system
+- ❌ Clean session logic
+- ❌ Retained messages
+- ❌ Will messages
+- ❌ Keep-alive mechanism
+
+### **Milestone 2**: QoS=1 Support (in-memory)
+- QoS=1 message acknowledgment
+- Message persistence in memory
+- Duplicate message handling
+
+### **Milestone 3**: Basic Persistency & QoS=2
+- Persistent storage interface
+- QoS=2 message handling
+- Session state persistence
+
+### **Milestone 4**: Basic Authentication
+- Config file-based authentication
+- User credentials management
+- Connection authentication
+
+### **Milestone 5**: Enhanced Transport Layer
+- TLS/SSL support
+- WebSocket transport
+- Transport layer security
+
+### **Milestone 6**: Pluggable Architecture
+- Pluggable persistence backends
+- Pluggable authentication providers
+- Pluggable authorization systems
+
+### **Milestone 7**: Production Ready
+- Enhanced logging and metrics
+- Comprehensive documentation
+- Usage examples and tutorials
+- Single-node MQTT server for production use
 
 ## Architecture
 
@@ -37,12 +70,13 @@ iothub/
 ├── src/
 │   ├── protocol/          # MQTT protocol implementation
 │   ├── server.rs          # Core server orchestration
+│   ├── broker.rs          # Connection broker per transport
 │   ├── session.rs         # Session management
 │   ├── router.rs          # Message routing
 │   ├── transport.rs       # Transport abstraction
 │   ├── config.rs          # Configuration management
-│   ├── storage/           # Persistence layer (Stone 6)
-│   └── auth/              # Authentication/Authorization (Stone 5-7)
+│   ├── storage/           # Persistence layer (Milestone 3+)
+│   └── auth/              # Authentication/Authorization (Milestone 4+)
 ├── docs/                  # Architecture and roadmap documentation
 ├── tests/                 # Integration tests
 ├── benches/              # Performance benchmarks
@@ -61,7 +95,7 @@ iothub/
 │  └─────────────┘  └─────────────┘  └─────────────┘        │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────────┤
-│  │              Sessions (by clientId)                     │
+│  │              Sessions (by sessionId)                    │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
 │  │  │  Session    │  │  Session    │  │  Session    │    │
 │  │  │ (sessionId) │  │ (sessionId) │  │ (sessionId) │    │
@@ -76,6 +110,14 @@ iothub/
 │  Config • Transport • Shutdown Management                  │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Key Design Decisions
+
+- **CancellationToken**: Used throughout for race-condition-free shutdown
+- **Half-connected sessions**: Tracked separately until CONNECT received
+- **Stream passing**: Packet handlers receive stream reference to avoid deadlocks
+- **Thread-safe cleanup**: Lock-based swap pattern for safe concurrent operations
+- **Event-driven**: tokio::select! for responsive packet and shutdown handling
 
 ## Quick Start
 

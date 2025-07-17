@@ -55,12 +55,12 @@ docker run -p 1883:1883 iothub
 
 ## Architecture Overview
 
-IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The architecture follows a **Server → Broker → Session** hierarchy:
+IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The architecture follows a **Server → Broker → Session** hierarchy with event-driven design and race-condition-free shutdown.
 
 ### Core Components
 
 - **Server** (`src/server.rs`): Central orchestrator managing brokers, sessions, routing, and shutdown
-- **Broker** (`src/server.rs`): Protocol-specific network listeners (TCP, WebSocket, TLS planned)
+- **Broker** (`src/broker.rs`): Protocol-specific network listeners (TCP, WebSocket, TLS planned)
 - **Session** (`src/session.rs`): Individual client connection handlers with unique sessionId
 - **Router** (`src/router.rs`): Message routing and subscription management using sessionId internally
 - **Protocol** (`src/protocol/`): MQTT v3.1.1 packet parsing and handling
@@ -69,28 +69,53 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The ar
 
 ### Key Design Patterns
 
-1. **Session Management**: Each session has a unique `sessionId` for internal routing, separate from MQTT `clientId` to handle conflicts
-2. **Graceful Shutdown**: Coordinated via `Arc<Notify>` across all components with connection draining
-3. **Thread Safety**: Uses `DashMap` and `Arc` for concurrent access to shared state
-4. **Async Architecture**: Tokio-based with select! loops for handling multiple event sources
-5. **Transport Abstraction**: Traits allow multiple protocols (TCP implemented, WebSocket/TLS planned)
+1. **CancellationToken Architecture**: Uses `tokio_util::sync::CancellationToken` throughout for race-condition-free shutdown
+2. **Half-connected Sessions**: Tracked separately until CONNECT received to manage incomplete connections
+3. **Stream Passing**: Packet handlers receive stream reference to avoid write lock deadlocks
+4. **Thread-safe Cleanup**: Lock-based swap pattern for safe concurrent operations
+5. **Event-driven**: tokio::select! for responsive packet and shutdown handling
+6. **Session Management**: SessionId starts as `__anon_$uuid`, becomes `__client_$clientId` after CONNECT
+
+### Current Status (Milestone 1)
+
+**✅ Completed:**
+- Event-driven architecture with tokio::select! 
+- Race-condition-free shutdown using CancellationToken
+- Half-connected session tracking and cleanup
+- Stream deadlock prevention
+- UNIX signal handling (SIGINT graceful, SIGTERM immediate)
+- Basic MQTT v3.1.1 packet handling (CONNECT, CONNACK, PUBLISH tested)
+
+**🔄 In Progress:**
+- Testing all packet types (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
+
+**❌ Missing for Milestone 1:**
+- Message routing system (biggest gap)
+- Clean session logic
+- Retained messages
+- Will messages
+- Keep-alive mechanism
 
 ### Project Structure
-- `src/auth/` - Authentication and authorization (Stone 5-7)
-- `src/protocol/` - MQTT protocol implementation (v3.1.1 complete, v5.0 planned)
-- `src/storage/` - Persistence layer interfaces (Stone 6)
+- `src/auth/` - Authentication and authorization (Milestone 4+)
+- `src/protocol/` - MQTT protocol implementation (v3.1.1 in progress)
+- `src/storage/` - Persistence layer interfaces (Milestone 3+)
 - `tests/` - Integration and unit tests
 - `benches/` - Performance benchmarks
 - `docs/` - Detailed architecture documentation
 
-### Current Status (Stone 2)
-- Multi-broker architecture with graceful shutdown
-- Session management with clientId conflict resolution
-- Transport abstraction supporting TCP (WebSocket/TLS planned)
-- Thread-safe operations with DashMap and Arc
+### Development Roadmap
+
+**Milestone 1** (Current): Full MQTTv3 Server (QoS=0, no persistency/auth)
+**Milestone 2**: QoS=1 Support (in-memory)
+**Milestone 3**: Basic Persistency & QoS=2
+**Milestone 4**: Basic Authentication
+**Milestone 5**: Enhanced Transport Layer (TLS)
+**Milestone 6**: Pluggable Architecture
+**Milestone 7**: Production Ready
 
 ### Testing Strategy
-- Integration tests connect to test server on port 18833
+- Integration tests connect to test server on different ports (18831, 18832, 18833)
 - Tests verify MQTT protocol compliance (CONNECT/CONNACK flows)
 - Simple connection tests validate basic server functionality
 - Use `cargo test test_simple_connect` for basic connectivity verification
@@ -103,3 +128,18 @@ The server uses a comprehensive TOML-based configuration system with support for
 - Logging configuration
 
 Default server runs on `127.0.0.1:1883` for MQTT clients.
+
+### Key Technical Notes
+
+- **Deadlock Prevention**: Session packet handlers accept stream parameter to avoid double-locking
+- **Session Cleanup**: `cleanup_and_exit()` removes half-connected sessions only if not connected
+- **Shutdown Sequence**: Server → Brokers → Sessions with proper ordering
+- **Error Handling**: `handle_message` failures now terminate session loop
+- **Import Pattern**: Use `use crate::protocol::packet;` for module-level imports
+
+### Common Issues and Solutions
+
+1. **Deadlock in packet handling**: Pass stream reference to handlers instead of acquiring lock again
+2. **Race conditions in shutdown**: Use CancellationToken instead of Notify for state-maintaining cancellation
+3. **Session cleanup ordering**: Half-connected removal before server registration
+4. **Stream write failures**: Terminate session loop on message delivery errors
