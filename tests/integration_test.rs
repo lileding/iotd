@@ -5,27 +5,14 @@ use tokio::time::timeout;
 
 #[tokio::test]
 async fn test_basic_connect_and_disconnect() {
-    // Start server in background
-    let server_handle = tokio::spawn(async {
-        let mut config = iothub::config::Config::default();
-        config.server.listen_addresses.push("tcp://127.0.0.1:18831".to_string());
-        let server = iothub::server::Server::new(&config);
-        server.run().await;
-    });
-
-    // Connect with retry
-    let connect_with_retry = |addr: String| async move {
-        for _ in 0..3 {
-            match TcpStream::connect(&addr).await {
-                Ok(stream) => return stream,
-                Err(_) => tokio::time::sleep(Duration::from_secs(1)).await,
-            }
-        }
-        panic!("Failed to connect after retries");
-    };
+    // Start server
+    let mut config = iothub::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iothub::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
 
     // Connect client
-    let mut stream = connect_with_retry("127.0.0.1:18831".to_string()).await;
+    let mut stream = TcpStream::connect(&address).await.unwrap();
 
     // Send CONNECT packet (MQTT v3.1.1)
     let connect_packet = [
@@ -57,40 +44,24 @@ async fn test_basic_connect_and_disconnect() {
     stream.write_all(&disconnect_packet).await.unwrap();
     stream.flush().await.unwrap();
 
-    server_handle.abort();
+    let _ = server.stop().await;
 }
 
 #[tokio::test]
 async fn test_publish_subscribe() {
-    // Start server in background
-    let server_handle = tokio::spawn(async {
-        let mut config = iothub::config::Config::default();
-        config.server.listen_addresses.push("tcp://127.0.0.1:18832".to_string());
-        let server = iothub::server::Server::new(&config);
-        server.run().await;
-    });
-
-    // Give server time to start
-    tokio::time::sleep(Duration::from_millis(300)).await;
-
-    // Connect with retry
-    let connect_with_retry = |addr: String| async move {
-        for _ in 0..3 {
-            match TcpStream::connect(&addr).await {
-                Ok(stream) => return stream,
-                Err(_) => tokio::time::sleep(Duration::from_secs(1)).await,
-            }
-        }
-        panic!("Failed to connect after retries");
-    };
+    // Start server
+    let mut config = iothub::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iothub::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
 
     // Connect subscriber first
-    let mut subscriber = connect_with_retry("127.0.0.1:18832".to_string()).await;
+    let mut subscriber = TcpStream::connect(&address).await.unwrap();
     send_connect(&mut subscriber, "sub").await;
     read_connack(&mut subscriber).await;
 
     // Connect publisher
-    let mut publisher = connect_with_retry("127.0.0.1:18832".to_string()).await;
+    let mut publisher = TcpStream::connect(&address).await.unwrap();
     send_connect(&mut publisher, "pub").await;
     read_connack(&mut publisher).await;
 
@@ -148,7 +119,7 @@ async fn test_publish_subscribe() {
     assert_eq!(payload[2..7], *b"test/");
     assert_eq!(payload[7..], *b"hello");
 
-    server_handle.abort();
+    let _ = server.stop().await;
 }
 
 async fn send_connect(stream: &mut TcpStream, client_id: &str) {

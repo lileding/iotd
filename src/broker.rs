@@ -1,13 +1,13 @@
 use crate::session::Session;
 use crate::router::Router;
-use crate::protocol::packet;
+use crate::protocol::{packet, PublishPacket};
 use anyhow::Result;
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::error::Error;
 use std::sync::atomic::Ordering;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
@@ -18,11 +18,8 @@ pub struct Broker {
     named_clients: DashMap<String, (String, CancellationToken)>,
     #[allow(dead_code)]
     router: Router,
-    shutdown: CancellationToken,
+    shutdown: Mutex<CancellationToken>,
 }
-
-unsafe impl Send for Broker {}
-unsafe impl Sync for Broker {}
 
 impl Broker {
     pub fn new() -> Arc<Self> {
@@ -30,41 +27,44 @@ impl Broker {
             sessions: Mutex::new(HashMap::new()),
             named_clients: DashMap::new(),
             router: Router::new(),
-            shutdown: CancellationToken::new(),
+            shutdown: Mutex::new(CancellationToken::new()),
         })
     }
 
     pub async fn add_session(self: &Arc<Self>, session: Session) {
+        let mut sessions = self.sessions.lock().await;
+
         let session_id = session.session_id.clone();
         info!("Added session {} to broker", session_id);
         
         // Spawn a thread to handle client packets
         let broker_run = Arc::clone(self);
-        let shutdown = self.shutdown.child_token();
+        let shutdown = self.shutdown.lock().await.child_token();
         let handle = tokio::spawn(async move {
             Broker::process_session(broker_run, session, shutdown).await;
         });
         
-        self.sessions.lock().await.insert(session_id, handle);
+        sessions.insert(session_id, handle);
     }
 
     pub async fn clean_all_sessions(&self) {
         // Lock the sessions to avoid another add_session call
         let mut sessions = self.sessions.lock().await;
         
-        // Trigger shutdown signal
-        self.shutdown.cancel();
+        let mut shutdown = self.shutdown.lock().await;
+        let old_shutdown = shutdown.clone();
+        *shutdown = CancellationToken::new();
+        old_shutdown.cancel();
         
-        // Wait for every handle to complete in sessions
-        for (session_id, handle) in sessions.drain() {
+        let old_sessions: Vec<(String, JoinHandle<()>)> = sessions.drain().collect();
+        self.named_clients.clear();
+        drop(sessions);
+
+        for (session_id, handle) in old_sessions {
             if let Err(e) = handle.await {
                 error!("Error waiting for session {} to complete: {}", session_id, e);
             }
         }
-        
-        // Clean sessions and named_clients
-        sessions.clear();
-        self.named_clients.clear();
 
         info!("All sessions cleaned");
     }
@@ -72,9 +72,13 @@ impl Broker {
     pub async fn process_session(self: Arc<Self>, mut session: Session, shutdown: CancellationToken) {
         info!("Starting session processing for session {}", session.session_id);
         
+        // Create message channel for routing
+        let (message_tx, mut message_rx) = mpsc::channel::<PublishPacket>(1000);
+        let message_sender: Arc<mpsc::Sender<PublishPacket>> = Arc::new(message_tx);
+        
         loop {
             tokio::select! {
-                result = self.process_packet(&mut session, shutdown.clone()) => {
+                result = self.process_packet(&mut session, shutdown.clone(), message_sender.clone()) => {
                     match result {
                         Ok(true) => {
                             // Continue processing packets
@@ -87,6 +91,25 @@ impl Broker {
                             error!("Error processing packet for session {}: {}", session.session_id, e);
                             break;
                         },
+                    }
+                }
+
+                // Handle messages from router to send to client
+                message = message_rx.recv() => {
+                    match message {
+                        Some(publish_packet) => {
+                            let mut buf = bytes::BytesMut::new();
+                            packet::Packet::Publish(publish_packet).encode(&mut buf);
+                            if let Err(e) = session.stream.write_all(&buf).await {
+                                error!("Failed to send message to session {}: {}", session.session_id, e);
+                                break;
+                            }
+                            info!("Sent routed message to session {}", session.session_id);
+                        }
+                        None => {
+                            info!("Message channel closed for session {}", session.session_id);
+                            break;
+                        }
                     }
                 }
 
@@ -108,13 +131,17 @@ impl Broker {
             }
         }
         
+        // Clean up subscriptions for this session
+        self.router.unsubscribe_all(&session.session_id).await;
+        info!("Session {} unsubscribed completed", session.session_id);
+        
         // Remove session from sessions map
         self.sessions.lock().await.remove(&session.session_id);
         
         info!("Session {} processing completed", session.session_id);
     }
 
-    async fn process_packet(self: &Arc<Self>, session: &mut Session, shutdown: CancellationToken) -> Result<bool> {
+    async fn process_packet(self: &Arc<Self>, session: &mut Session, shutdown: CancellationToken, message_sender: Arc<mpsc::Sender<PublishPacket>>) -> Result<bool> {
         // Read and parse MQTT packet from stream
         match packet::Packet::decode(&mut session.stream).await {
             Ok(packet) => {
@@ -122,7 +149,7 @@ impl Broker {
                 return match packet {
                     packet::Packet::Connect(p) => self.on_connect(session, p, shutdown).await,
                     packet::Packet::Publish(p) => self.on_publish(session, p).await,
-                    packet::Packet::Subscribe(p) => self.on_subscribe(session, p).await,
+                    packet::Packet::Subscribe(p) => self.on_subscribe(session, p, message_sender).await,
                     packet::Packet::Unsubscribe(p) => self.on_unsubscribe(session, p).await,
                     packet::Packet::PingReq => self.on_pingreq(session).await,
                     packet::Packet::Disconnect => self.on_disconnect(session).await,
@@ -185,19 +212,24 @@ impl Broker {
     async fn on_publish(self: &Arc<Self>, session: &mut Session, packet: packet::PublishPacket) -> Result<bool> {
         let session_id = &session.session_id;
         info!("PUBLISH received for session {}: topic={}, qos={:?}", session_id, packet.topic, packet.qos);
+        
         // Route the message through the router
-        // self.router.route_message(packet).await?;
+        self.router.route(&packet.topic, &packet.payload).await?;
+               
         Ok(true)
     }
 
-    async fn on_subscribe(self: &Arc<Self>, session: &mut Session, packet: packet::SubscribePacket) -> Result<bool> {
+    async fn on_subscribe(self: &Arc<Self>, session: &mut Session, packet: packet::SubscribePacket, message_sender: Arc<mpsc::Sender<PublishPacket>>) -> Result<bool> {
         let session_id = &session.session_id;
         info!("SUBSCRIBE received for session {}: topics={:?}", session_id, packet.topic_filters);
         
-        // Handle subscription logic and send SUBACK
+        // Handle subscription logic through router
+        let return_codes = self.router.subscribe(session_id, message_sender, &packet.topic_filters).await?;
+        
+        // Send SUBACK
         let suback = packet::SubAckPacket {
             packet_id: packet.packet_id,
-            return_codes: vec![crate::protocol::v3::subscribe_return_codes::MAXIMUM_QOS_0; packet.topic_filters.len()],
+            return_codes,
         };
         let mut buf = bytes::BytesMut::new();
         packet::Packet::SubAck(suback).encode(&mut buf);
@@ -219,7 +251,10 @@ impl Broker {
         let session_id = &session.session_id;
         info!("UNSUBSCRIBE received for session {}: topics={:?}", session_id, packet.topic_filters);
         
-        // Handle unsubscription logic and send UNSUBACK
+        // Handle unsubscription logic through router
+        self.router.unsubscribe(&packet.topic_filters, session_id).await?;
+        
+        // Send UNSUBACK
         let unsuback = packet::UnsubAckPacket {
             packet_id: packet.packet_id,
         };

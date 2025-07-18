@@ -5,19 +5,17 @@ use tokio::time::timeout;
 
 #[tokio::test]
 async fn test_simple_connect() {
-    // Start server in background
-    let server_handle = tokio::spawn(async {
-        let mut config = iothub::config::Config::default();
-        config.server.listen_addresses.push("tcp://127.0.0.1:18833".to_string());
-        let server = iothub::server::Server::new(&config);
-        server.run().await;
-    });
+    // Start server
+    let mut config = iothub::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iothub::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
 
     // Give server time to start
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Connect client
-    let mut stream = TcpStream::connect("127.0.0.1:18833").await.unwrap();
+    let mut stream = TcpStream::connect(&address).await.unwrap();
     println!("Connected to server");
 
     // Send CONNECT packet (MQTT v3.1.1)
@@ -51,5 +49,5 @@ async fn test_simple_connect() {
     }
 
     println!("Test passed!");
-    server_handle.abort();
+    let _ = server.stop().await;
 }
