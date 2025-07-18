@@ -9,6 +9,7 @@ impl Router {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn unsubscribe_all(&self, _session: &Session) {
     }
 }

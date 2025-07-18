@@ -1,9 +1,7 @@
 use anyhow::Result;
 use iothub::config::{Config, ServerConfig, AuthConfig, StorageConfig, LoggingConfig};
-use iothub::server::Server;
-use std::sync::Arc;
 use tokio::signal;
-use tracing::{info, warn, Level};
+use tracing::{info, Level};
 use tracing_subscriber;
 
 #[tokio::main]
@@ -16,7 +14,7 @@ async fn main() -> Result<()> {
 
     let config = Config {
         server: ServerConfig {
-            listen_addresses: vec!["tcp://127.0.0.1:1883".to_string()],
+            address: "127.0.0.1:1883".to_string(),
             max_connections: 0,
             session_timeout_secs: 0,
             keep_alive_timeout_secs: 0,
@@ -27,45 +25,14 @@ async fn main() -> Result<()> {
         storage: StorageConfig::default(),
         logging: LoggingConfig::default(),
     };
-    let server = Server::new(&config);
-    let server_clone = Arc::clone(&server);
+    let server = iothub::server::start(config).await?;
     
-    // Spawn server task
-    let server_handle = tokio::spawn(async move {
-        server_clone.run().await;
-    });
+    // Wait for Ctrl+C
+    signal::ctrl_c().await?;
+    info!("Received SIGINT, initiating graceful shutdown...");
     
-    // Handle UNIX signals
-    tokio::select! {
-        // SIGINT (Ctrl+C) - graceful shutdown
-        _ = signal::ctrl_c() => {
-            info!("Received SIGINT, initiating graceful shutdown...");
-            server.shutdown().await;
-            info!("Graceful shutdown completed");
-        }
-        
-        // SIGTERM - immediate quit
-        _ = async {
-            #[cfg(unix)]
-            {
-                let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate()).unwrap();
-                sigterm.recv().await
-            }
-            #[cfg(not(unix))]
-            {
-                // On non-Unix systems, just wait forever (SIGTERM not available)
-                std::future::pending::<()>().await
-            }
-        } => {
-            warn!("Received SIGTERM, quitting immediately");
-            std::process::exit(0);
-        }
-        
-        // Server completed normally
-        _ = server_handle => {
-            info!("Server completed normally");
-        }
-    }
+    server.stop().await?;
+    info!("Graceful shutdown completed");
 
     Ok(())
 }

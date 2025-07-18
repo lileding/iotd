@@ -1,117 +1,165 @@
-use crate::broker::Broker;
 use crate::config::Config;
 use crate::session::Session;
-use crate::router::Router;
+use crate::broker::Broker;
+use crate::transport::{AsyncListener, TcpAsyncListener};
 use anyhow::Result;
-use dashmap::DashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{RwLock, Mutex};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, error};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ServerError {
+    #[error("Server failed to start: {0}")]
+    StartupFailed(String),
+    #[error("Server is already running")]
+    AlreadyRunning,
+    #[error("Server is not running")]
+    NotRunning,
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Other error: {0}")]
+    Other(#[from] anyhow::Error),
+}
+
+/// Static function to start a server with the given configuration
+pub async fn start(config: Config) -> Result<Server, ServerError> {
+    let server = Server::new(config);
+    server.start().await?;
+    Ok(server)
+}
 
 pub struct Server {
     config: Config,
-    brokers: DashMap<String, Arc<Broker>>,
-    sessions: DashMap<String, Arc<Session>>,
-    router: Router,
-    draining: RwLock<bool>,
+    broker: Arc<Broker>,
     shutdown_token: CancellationToken,
-    completed_token: CancellationToken,
+    running: AtomicBool,
+    server_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    address: RwLock<Option<String>>,
 }
 
+unsafe impl Send for Server {}
+unsafe impl Sync for Server {}
+
 impl Server {
-    pub fn new(config: &Config) -> Arc<Self> {
-        Arc::new(Self {
-            config: config.clone(),
-            brokers: DashMap::new(),
-            sessions: DashMap::new(),
-            router: Router::new(),
-            draining: RwLock::new(false),
+    pub fn new(config: Config) -> Self {
+        Self {
+            config,
+            broker: Broker::new(),
             shutdown_token: CancellationToken::new(),
-            completed_token: CancellationToken::new(),
-        })
+            running: AtomicBool::new(false),
+            server_handle: Mutex::new(None),
+            address: RwLock::new(None),
+        }
     }
 
-    pub async fn run(self: Arc<Self>) {
+    pub async fn start(&self) -> Result<(), ServerError> {
+        if self.running.load(Ordering::Acquire) {
+            return Err(ServerError::AlreadyRunning);
+        }
+
         info!("Starting Server");
 
-        // Start brokers for each configured address
-        for bind_address in &self.config.server.listen_addresses {
-            let broker = Broker::new(bind_address, Arc::clone(&self));
-            self.brokers.insert(bind_address.clone(), Arc::clone(&broker));
+        // Bind the listener directly to the address
+        let listener = TcpAsyncListener::bind(&self.config.server.address).await
+            .map_err(|e| ServerError::StartupFailed(format!("Failed to bind to {}: {}", self.config.server.address, e)))?;
 
-            let bind_address = bind_address.clone();
-            tokio::spawn(async move {
-                broker.run().await;
-                info!("Broker {} completed", &bind_address);
-            });
-        }
+        // Get the actual bound address (useful for port 0)
+        let bound_addr = listener.local_addr().await
+            .map_err(|e| ServerError::StartupFailed(format!("Failed to get local address: {}", e)))?;
+        
+        *self.address.write().await = Some(bound_addr.to_string());
 
+        info!("Server listening on {}", bound_addr);
+
+        // Spawn the server task
+        let broker = Arc::clone(&self.broker);
+        let shutdown_token = self.shutdown_token.clone();
+        let handle = tokio::spawn(async move {
+            Self::run_server(broker, listener, shutdown_token).await;
+        });
+
+        // Store the handle
+        *self.server_handle.lock().await = Some(handle);
+
+        self.running.store(true, Ordering::Release);
         info!("Server started successfully");
-
-        self.shutdown_token.cancelled().await;
-        info!("Server received shutdown signal");
-
-        // Enable drain mode to prevent new session registrations
-        *self.draining.write().await = true;
-
-        // Wait for all brokers to shutdown
-        for broker in self.brokers.iter() {
-            broker.shutdown().await;
-        }
-        self.brokers.clear();
-
-        // Clear all sessions
-        for session in self.sessions.iter() {
-            session.value().shutdown().await;
-            self.router.unsubscribe_all(&session.value()).await;
-        }
-        self.sessions.clear();
-
-        // Mark as completed
-        self.completed_token.cancel();
-
-        info!("Server run() completed");
+        Ok(())
     }
 
-    pub async fn shutdown(&self) {
-        info!("Shutting down server");
+    pub async fn stop(&self) -> Result<(), ServerError> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(ServerError::NotRunning);
+        }
+
+        info!("Stopping server");
 
         // Send shutdown signal
         self.shutdown_token.cancel();
 
-        // Wait for completion
-        self.completed_token.cancelled().await;
-        info!("Server shutdown completed");
-    }
-
-    pub async fn register_session(&self, session: Arc<Session>) -> Result<()> {
-        // Check if we're in drain mode
-        let draining = self.draining.read().await;
-        if *draining {
-            return Err(anyhow::anyhow!("Server is in drain mode, rejecting new session"));
+        // Wait for the server task to complete
+        if let Some(handle) = self.server_handle.lock().await.take() {
+            handle.await.map_err(|e| ServerError::Other(e.into()))?;
         }
 
-        let session_id = session.session_id().await;
+        // Clear all sessions
+        self.broker.clean_all_sessions().await;
 
-        // Handle sessionId conflicts using atomic swap
-        if let Some(existing_session) = self.sessions.insert(session_id.clone(), session) {
-            info!("Removing existing session {}", &session_id);
-            existing_session.shutdown().await;
-            self.router.unsubscribe_all(&existing_session).await;
-        }
+        // Mark as not running
+        self.running.store(false, Ordering::Release);
 
-        info!("Registered session {}", &session_id);
+        info!("Server stopped");
         Ok(())
     }
 
-    pub async fn unregister_session(&self, session_id: &str) {
-        // When a session ends (either on its own or during server shutdown),
-        // it calls this function to remove itself from the server's records.
-        if let Some((_, session)) = self.sessions.remove(session_id) {
-            self.router.unsubscribe_all(&session).await;
-            info!("Unregistered session {}", session_id);
-        }
+    pub async fn is_running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
     }
+
+    pub async fn address(&self) -> Option<String> {
+        self.address.read().await.clone()
+    }
+
+    async fn run_server(broker: Arc<Broker>, listener: TcpAsyncListener, shutdown_token: CancellationToken) {
+        // Main server loop
+        loop {
+            tokio::select! {
+                // Accept new client connections
+                accept_result = listener.accept() => {
+                    match accept_result {
+                        Ok(stream) => {
+                            info!("New client connected");
+                            // Create a new session
+                            let session = Session::new(stream);
+                            
+                            // Add to broker
+                            broker.add_session(session).await;
+                            
+                        }
+                        Err(e) => {
+                            error!("Failed to accept connection: {}", e);
+                        }
+                    }
+                }
+
+                // Handle shutdown signal
+                _ = shutdown_token.cancelled() => {
+                    info!("Server received shutdown signal");
+                    break;
+                }
+            }
+        }
+
+        // Close the listener to prevent new connections
+        if let Err(e) = listener.close().await {
+            error!("Failed to close listener: {}", e);
+        }
+
+        info!("Server loop completed");
+    }
+
+
 }
 

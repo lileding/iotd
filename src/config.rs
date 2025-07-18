@@ -11,7 +11,7 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
-    pub listen_addresses: Vec<String>,
+    pub address: String,
     pub max_connections: usize,
     pub session_timeout_secs: u64,
     pub keep_alive_timeout_secs: u64,
@@ -52,7 +52,7 @@ impl Default for Config {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            listen_addresses: vec!["tcp://0.0.0.0:1883".to_string()],
+            address: "127.0.0.1:1883".to_string(),
             max_connections: 10000,
             session_timeout_secs: 300,
             keep_alive_timeout_secs: 60,

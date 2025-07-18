@@ -1,162 +1,237 @@
-use crate::server::Server;
 use crate::session::Session;
-use crate::transport::{AsyncListener, TcpAsyncListener};
+use crate::router::Router;
+use crate::protocol::packet;
 use anyhow::Result;
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::sync::Arc;
+use std::error::Error;
+use std::sync::atomic::Ordering;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{info, error};
 
 pub struct Broker {
-    bind_address: String,
-    server: Arc<Server>,
-    shutdown_token: CancellationToken,
-    completed_token: CancellationToken,
-    half_connected_sessions: Mutex<HashMap<String, Arc<Session>>>,
+    sessions: Mutex<HashMap<String, JoinHandle<()>>>,
+    named_clients: DashMap<String, (String, CancellationToken)>,
+    #[allow(dead_code)]
+    router: Router,
+    shutdown: CancellationToken,
 }
 
+unsafe impl Send for Broker {}
+unsafe impl Sync for Broker {}
+
 impl Broker {
-    pub fn new<S: AsRef<str>>(
-        bind_address: S,
-        server: Arc<Server>,
-    ) -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            bind_address: bind_address.as_ref().to_string(),
-            server,
-            shutdown_token: CancellationToken::new(),
-            completed_token: CancellationToken::new(),
-            half_connected_sessions: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
+            named_clients: DashMap::new(),
+            router: Router::new(),
+            shutdown: CancellationToken::new(),
         })
     }
 
-    pub async fn run(self: Arc<Self>) {
-        // Parse protocol from bind_address
-        let (protocol, addr) = match parse_address(&self.bind_address) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                error!("Failed to parse bind address {}: {}", self.bind_address, e);
-                self.completed_token.cancel();
-                return;
+    pub async fn add_session(self: &Arc<Self>, session: Session) {
+        let session_id = session.session_id.clone();
+        info!("Added session {} to broker", session_id);
+        
+        // Spawn a thread to handle client packets
+        let broker_run = Arc::clone(self);
+        let shutdown = self.shutdown.child_token();
+        let handle = tokio::spawn(async move {
+            Broker::process_session(broker_run, session, shutdown).await;
+        });
+        
+        self.sessions.lock().await.insert(session_id, handle);
+    }
+
+    pub async fn clean_all_sessions(&self) {
+        // Lock the sessions to avoid another add_session call
+        let mut sessions = self.sessions.lock().await;
+        
+        // Trigger shutdown signal
+        self.shutdown.cancel();
+        
+        // Wait for every handle to complete in sessions
+        for (session_id, handle) in sessions.drain() {
+            if let Err(e) = handle.await {
+                error!("Error waiting for session {} to complete: {}", session_id, e);
             }
-        };
+        }
         
-        // Create listener
-        let listener = match self.create_listener(&protocol, &addr).await {
-            Ok(listener) => listener,
-            Err(e) => {
-                error!("Failed to create listener for {}: {}", self.bind_address, e);
-                self.completed_token.cancel();
-                return;
-            }
-        };
+        // Clean sessions and named_clients
+        sessions.clear();
+        self.named_clients.clear();
+
+        info!("All sessions cleaned");
+    }
+
+    pub async fn process_session(self: Arc<Self>, mut session: Session, shutdown: CancellationToken) {
+        info!("Starting session processing for session {}", session.session_id);
         
-        let local_addr = match listener.local_addr().await {
-            Ok(addr) => addr,
-            Err(e) => {
-                error!("Failed to get local address: {}", e);
-                self.completed_token.cancel();
-                return;
-            }
-        };
-        
-        info!("Broker listening on {} (bound to {})", self.bind_address, local_addr);
-        
-        // Main accept loop
         loop {
             tokio::select! {
-                result = listener.accept() => {
+                result = self.process_packet(&mut session, shutdown.clone()) => {
                     match result {
-                        Ok(stream) => {
-                            let peer_addr = stream.peer_addr().unwrap_or_else(|_| "unknown".parse().unwrap());
-                            info!("New connection from {}", peer_addr);
-                            
-                            let session = Session::new(stream, Arc::clone(&self.server), Arc::clone(&self));
-                            let session_id = session.session_id().await;
-                            
-                            // Track as half-connected session
-                            self.half_connected_sessions.lock().await.insert(session_id.clone(), Arc::clone(&session));
-                            
-                            tokio::spawn(async move {
-                                session.run().await;
-                            });
-                        }
+                        Ok(true) => {
+                            // Continue processing packets
+                        },
+                        Ok(false) => {
+                            info!("Session {} ended normally", session.session_id);
+                            break;
+                        },
                         Err(e) => {
-                            error!("Failed to accept connection: {}", e);
-                            break; // Exit the loop on accept failure
-                        }
+                            error!("Error processing packet for session {}: {}", session.session_id, e);
+                            break;
+                        },
                     }
                 }
-                
-                _ = self.shutdown_token.cancelled() => {
-                    info!("Broker shutting down gracefully");
+
+                _ = shutdown.cancelled() => {
+                    info!("Session {} shutting down due to broker shutdown", session.session_id);
+                    
+                    // Send DISCONNECT message if session is connected
+                    if session.connected.load(Ordering::Relaxed) {
+                        let disconnect = packet::Packet::Disconnect;
+                        let mut buf = bytes::BytesMut::new();
+                        disconnect.encode(&mut buf);
+                        if let Err(e) = session.stream.write_all(&buf).await {
+                            error!("Failed to send disconnect message for session {}: {}", session.session_id, e);
+                        }
+                    }
+                    
                     break;
+                },
+            }
+        }
+        
+        // Remove session from sessions map
+        self.sessions.lock().await.remove(&session.session_id);
+        
+        info!("Session {} processing completed", session.session_id);
+    }
+
+    async fn process_packet(self: &Arc<Self>, session: &mut Session, shutdown: CancellationToken) -> Result<bool> {
+        // Read and parse MQTT packet from stream
+        match packet::Packet::decode(&mut session.stream).await {
+            Ok(packet) => {
+                // Handle different packet types
+                return match packet {
+                    packet::Packet::Connect(p) => self.on_connect(session, p, shutdown).await,
+                    packet::Packet::Publish(p) => self.on_publish(session, p).await,
+                    packet::Packet::Subscribe(p) => self.on_subscribe(session, p).await,
+                    packet::Packet::Unsubscribe(p) => self.on_unsubscribe(session, p).await,
+                    packet::Packet::PingReq => self.on_pingreq(session).await,
+                    packet::Packet::Disconnect => self.on_disconnect(session).await,
+                    _ => {
+                        let session_id = &session.session_id;
+                        error!("Unhandled packet type for session {}", session_id);
+                        Ok(false)
+                    }
+                }
+            },
+            Err(e) => {
+                // Check if this is a connection closed error
+                if let Some(io_error) = e.source().and_then(|e| e.downcast_ref::<std::io::Error>()) {
+                    if io_error.kind() == std::io::ErrorKind::UnexpectedEof {
+                        let session_id = &session.session_id;
+                        info!("Client {} closed connection", session_id);
+                        return Ok(false);
+                    }
+                }
+                let session_id = &session.session_id;
+                error!("Packet decoding error for session {}: {}", session_id, e);
+                Err(e.into())
+            }
+        }
+    }
+
+    async fn on_connect(self: &Arc<Self>, session: &mut Session, packet: packet::ConnectPacket, shutdown: CancellationToken) -> Result<bool> {
+        info!("CONNECT received: client_id={}, clean_session={}", packet.client_id, packet.clean_session);
+
+        // Set connected flag to true before sending CONNACK
+        session.connected.store(true, Ordering::Relaxed);
+
+        // Send CONNACK response
+        let connack = packet::ConnAckPacket {
+            session_present: false,
+            return_code: crate::protocol::v3::connect_return_codes::ACCEPTED,
+        };
+        let mut buf = bytes::BytesMut::new();
+        packet::Packet::ConnAck(connack).encode(&mut buf);
+        session.stream.write_all(&buf).await?;
+
+        // Update client ID if provided and handle name collision after CONNACK
+        if !packet.client_id.is_empty() {
+            session.client_id = Some(packet.client_id.clone());
+            // Remove name collisioned session
+            if let Some((old_session_id, cancel)) = self.named_clients.insert(packet.client_id.clone(), (session.session_id.clone(), shutdown)) {
+                info!("Client {} already connected on session {}, cancelling old session", packet.client_id, old_session_id);
+                cancel.cancel();
+                if let Some(handle) = self.sessions.lock().await.remove(&old_session_id) {
+                    if let Err(e) = handle.await {
+                        error!("Error waiting for session {} to complete: {}", old_session_id, e);
+                    }
                 }
             }
         }
 
-        // Close listener
-        if let Err(e) = listener.close().await {
-            error!("Failed to close listener: {}", e);
-        }
+        Ok(true)
+    }
+
+    async fn on_publish(self: &Arc<Self>, session: &mut Session, packet: packet::PublishPacket) -> Result<bool> {
+        let session_id = &session.session_id;
+        info!("PUBLISH received for session {}: topic={}, qos={:?}", session_id, packet.topic, packet.qos);
+        // Route the message through the router
+        // self.router.route_message(packet).await?;
+        Ok(true)
+    }
+
+    async fn on_subscribe(self: &Arc<Self>, session: &mut Session, packet: packet::SubscribePacket) -> Result<bool> {
+        let session_id = &session.session_id;
+        info!("SUBSCRIBE received for session {}: topics={:?}", session_id, packet.topic_filters);
         
-        // Clean up half-connected sessions
-        let sessions_to_shutdown = {
-            let mut sessions = self.half_connected_sessions.lock().await;
-            let temp_map = sessions.clone();
-            sessions.clear();
-            temp_map
+        // Handle subscription logic and send SUBACK
+        let suback = packet::SubAckPacket {
+            packet_id: packet.packet_id,
+            return_codes: vec![crate::protocol::v3::subscribe_return_codes::MAXIMUM_QOS_0; packet.topic_filters.len()],
         };
-        
-        info!("Cleaning up {} half-connected sessions", sessions_to_shutdown.len());
-        
-        // Now safely shutdown all sessions from the swapped map
-        for (_, session) in sessions_to_shutdown {
-            session.shutdown().await;
-        }
-        
-        // Mark as completed
-        self.completed_token.cancel();
-        
-        info!("Broker run() completed");
+        let mut buf = bytes::BytesMut::new();
+        packet::Packet::SubAck(suback).encode(&mut buf);
+        session.stream.write_all(&buf).await?;
+        Ok(true)
     }
 
-    pub async fn shutdown(&self) {
-        // Send shutdown signal
-        self.shutdown_token.cancel();
+    async fn on_pingreq(self: &Arc<Self>, session: &mut Session) -> Result<bool> {
+        let session_id = &session.session_id;
+        info!("PINGREQ received for session {}", session_id);
+        let pingresp = packet::Packet::PingResp;
+        let mut buf = bytes::BytesMut::new();
+        pingresp.encode(&mut buf);
+        session.stream.write_all(&buf).await?;
+        Ok(true)
+    }
+
+    async fn on_unsubscribe(self: &Arc<Self>, session: &mut Session, packet: packet::UnsubscribePacket) -> Result<bool> {
+        let session_id = &session.session_id;
+        info!("UNSUBSCRIBE received for session {}: topics={:?}", session_id, packet.topic_filters);
         
-        // Wait for completion
-        self.completed_token.cancelled().await;
-        
-        info!("Broker shutdown complete");
+        // Handle unsubscription logic and send UNSUBACK
+        let unsuback = packet::UnsubAckPacket {
+            packet_id: packet.packet_id,
+        };
+        let mut buf = bytes::BytesMut::new();
+        packet::Packet::UnsubAck(unsuback).encode(&mut buf);
+        session.stream.write_all(&buf).await?;
+        Ok(true)
     }
 
-    pub async fn remove_half_connected_session(&self, session_id: &str) {
-        self.half_connected_sessions.lock().await.remove(session_id);
-    }
-
-    async fn create_listener(&self, protocol: &str, addr: &str) -> Result<Box<dyn AsyncListener>> {
-        match protocol {
-            "tcp" => {
-                let listener = TcpAsyncListener::bind(addr).await?;
-                Ok(Box::new(listener))
-            }
-            _ => {
-                anyhow::bail!("Protocol '{}' not implemented yet", protocol);
-            }
-        }
-    }
-}
-
-// Helper function to parse address
-fn parse_address(bind_address: &str) -> Result<(String, String)> {
-    if let Some(addr) = bind_address.strip_prefix("tcp://") {
-        Ok(("tcp".to_string(), addr.to_string()))
-    } else if let Some(addr) = bind_address.strip_prefix("ws://") {
-        Ok(("ws".to_string(), addr.to_string()))
-    } else if let Some(addr) = bind_address.strip_prefix("wss://") {
-        Ok(("wss".to_string(), addr.to_string()))
-    } else {
-        anyhow::bail!("Unsupported protocol in address: {}", bind_address)
+    async fn on_disconnect(self: &Arc<Self>, session: &mut Session) -> Result<bool> {
+        let session_id = &session.session_id;
+        info!("DISCONNECT received for session {}", session_id);
+        Ok(false)
     }
 }

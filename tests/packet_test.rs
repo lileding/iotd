@@ -3,22 +3,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-const TEST_SERVER_ADDR: &str = "127.0.0.1:18834";
-
-/// Helper function to start test server
-async fn start_test_server() -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async {
-        let mut config = iothub::config::Config::default();
-        config.server.listen_addresses.push(format!("tcp://{}", TEST_SERVER_ADDR));
-        let server = iothub::server::Server::new(&config);
-        server.run().await;
-    })
+/// Helper function to start test server and return server with address
+async fn start_test_server() -> (iothub::server::Server, String) {
+    let mut config = iothub::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iothub::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+    (server, address)
 }
 
 /// Helper function to connect to test server with retries
-async fn connect_to_server() -> TcpStream {
+async fn connect_to_server(address: &str) -> TcpStream {
     for _ in 0..5 {
-        match TcpStream::connect(TEST_SERVER_ADDR).await {
+        match TcpStream::connect(address).await {
             Ok(stream) => return stream,
             Err(_) => tokio::time::sleep(Duration::from_millis(200)).await,
         }
@@ -142,10 +139,10 @@ async fn read_packet_with_timeout(stream: &mut TcpStream, timeout_duration: Dura
 
 #[tokio::test]
 async fn test_connect_with_client_id() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Send CONNECT with client ID
     let connect_packet = create_connect_packet("test_client", true, 60);
@@ -161,10 +158,10 @@ async fn test_connect_with_client_id() {
 
 #[tokio::test]
 async fn test_connect_without_client_id() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Send CONNECT without client ID (empty string)
     let connect_packet = create_connect_packet("", true, 60);
@@ -178,10 +175,10 @@ async fn test_connect_without_client_id() {
 
 #[tokio::test]
 async fn test_connect_clean_session_flag() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Send CONNECT with clean_session = false
     let connect_packet = create_connect_packet("test_client", false, 60);
@@ -195,17 +192,17 @@ async fn test_connect_clean_session_flag() {
 
 #[tokio::test]
 async fn test_connect_duplicate_client_id() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
     // First connection
-    let mut stream1 = connect_to_server().await;
+    let mut stream1 = connect_to_server(&address).await;
     let connect_packet = create_connect_packet("duplicate_client", true, 60);
     stream1.write_all(&connect_packet).await.unwrap();
     let _response1 = read_packet_with_timeout(&mut stream1, Duration::from_secs(2)).await.unwrap();
     
     // Second connection with same client ID
-    let mut stream2 = connect_to_server().await;
+    let mut stream2 = connect_to_server(&address).await;
     stream2.write_all(&connect_packet).await.unwrap();
     let response2 = read_packet_with_timeout(&mut stream2, Duration::from_secs(2)).await.unwrap();
     
@@ -220,10 +217,10 @@ async fn test_connect_duplicate_client_id() {
 
 #[tokio::test]
 async fn test_publish_qos0() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("publisher", true, 60);
@@ -240,10 +237,10 @@ async fn test_publish_qos0() {
 
 #[tokio::test]
 async fn test_publish_retained() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("publisher", true, 60);
@@ -259,10 +256,10 @@ async fn test_publish_retained() {
 
 #[tokio::test]
 async fn test_publish_empty_payload() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("publisher", true, 60);
@@ -282,10 +279,10 @@ async fn test_publish_empty_payload() {
 
 #[tokio::test]
 async fn test_subscribe_single_topic() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("subscriber", true, 60);
@@ -307,10 +304,10 @@ async fn test_subscribe_single_topic() {
 
 #[tokio::test]
 async fn test_subscribe_wildcard_topics() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("subscriber", true, 60);
@@ -332,10 +329,10 @@ async fn test_subscribe_wildcard_topics() {
 
 #[tokio::test]
 async fn test_subscribe_invalid_topic() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("subscriber", true, 60);
@@ -358,10 +355,10 @@ async fn test_subscribe_invalid_topic() {
 
 #[tokio::test]
 async fn test_unsubscribe() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("subscriber", true, 60);
@@ -387,10 +384,10 @@ async fn test_unsubscribe() {
 
 #[tokio::test]
 async fn test_unsubscribe_nonexistent_topic() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("subscriber", true, 60);
@@ -413,10 +410,10 @@ async fn test_unsubscribe_nonexistent_topic() {
 
 #[tokio::test]
 async fn test_pingreq_pingresp() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("ping_client", true, 60);
@@ -435,10 +432,10 @@ async fn test_pingreq_pingresp() {
 
 #[tokio::test]
 async fn test_multiple_pingreq() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("ping_client", true, 60);
@@ -462,10 +459,10 @@ async fn test_multiple_pingreq() {
 
 #[tokio::test]
 async fn test_disconnect() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("disconnect_client", true, 60);
@@ -494,10 +491,10 @@ async fn test_disconnect() {
 
 #[tokio::test]
 async fn test_invalid_packet_type() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("invalid_client", true, 60);
@@ -514,10 +511,10 @@ async fn test_invalid_packet_type() {
 
 #[tokio::test]
 async fn test_malformed_packet() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("malformed_client", true, 60);
@@ -538,10 +535,10 @@ async fn test_malformed_packet() {
 
 #[tokio::test]
 async fn test_packet_before_connect() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Send PUBLISH before CONNECT (should be rejected)
     let publish_packet = create_publish_packet("test/topic", b"hello", 0, false);
@@ -553,10 +550,10 @@ async fn test_packet_before_connect() {
 
 #[tokio::test]
 async fn test_large_packet() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    let mut stream = connect_to_server().await;
+    let mut stream = connect_to_server(&address).await;
     
     // Connect first
     let connect_packet = create_connect_packet("large_client", true, 60);
@@ -577,11 +574,11 @@ async fn test_large_packet() {
 
 #[tokio::test]
 async fn test_publish_subscribe_routing() {
-    let _server = start_test_server().await;
+    let (_server, address) = start_test_server().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     
     // Create subscriber
-    let mut subscriber = connect_to_server().await;
+    let mut subscriber = connect_to_server(&address).await;
     let connect_packet = create_connect_packet("subscriber", true, 60);
     subscriber.write_all(&connect_packet).await.unwrap();
     let _connack = read_packet_with_timeout(&mut subscriber, Duration::from_secs(2)).await.unwrap();
@@ -592,7 +589,7 @@ async fn test_publish_subscribe_routing() {
     let _suback = read_packet_with_timeout(&mut subscriber, Duration::from_secs(2)).await.unwrap();
     
     // Create publisher
-    let mut publisher = connect_to_server().await;
+    let mut publisher = connect_to_server(&address).await;
     let connect_packet = create_connect_packet("publisher", true, 60);
     publisher.write_all(&connect_packet).await.unwrap();
     let _connack = read_packet_with_timeout(&mut publisher, Duration::from_secs(2)).await.unwrap();
