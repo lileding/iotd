@@ -3,8 +3,20 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
+static INIT: std::sync::Once = std::sync::Once::new();
+
+pub fn init_test_logging() {
+    INIT.call_once(|| {
+        return;
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .init();
+    });
+}
+
 #[tokio::test]
 async fn test_basic_connect_and_disconnect() {
+    init_test_logging();
     // Start server
     let mut config = iothub::config::Config::default();
     config.server.address = "127.0.0.1:0".to_string();
@@ -17,7 +29,7 @@ async fn test_basic_connect_and_disconnect() {
     // Send CONNECT packet (MQTT v3.1.1)
     let connect_packet = [
         0x10, // CONNECT packet type
-        0x12, // Remaining length = 18 (12 + 4 + 2)
+        0x10, // Remaining length = 16
         0x00, 0x04, // Protocol name length
         b'M', b'Q', b'T', b'T', // Protocol name "MQTT"
         0x04, // Protocol level (3.1.1)
@@ -49,6 +61,7 @@ async fn test_basic_connect_and_disconnect() {
 
 #[tokio::test]
 async fn test_publish_subscribe() {
+    init_test_logging();
     // Start server
     let mut config = iothub::config::Config::default();
     config.server.address = "127.0.0.1:0".to_string();

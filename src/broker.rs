@@ -74,7 +74,7 @@ impl Broker {
         
         // Create message channel for routing
         let (message_tx, mut message_rx) = mpsc::channel::<PublishPacket>(1000);
-        let message_sender: Arc<mpsc::Sender<PublishPacket>> = Arc::new(message_tx);
+        let message_sender = Arc::new(message_tx);
         
         loop {
             tokio::select! {

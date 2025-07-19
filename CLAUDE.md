@@ -84,13 +84,11 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The ar
 - Half-connected session tracking and cleanup
 - Stream deadlock prevention
 - UNIX signal handling (SIGINT graceful, SIGTERM immediate)
-- Basic MQTT v3.1.1 packet handling (CONNECT, CONNACK, PUBLISH tested)
-
-**🔄 In Progress:**
-- Testing all packet types (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
+- Complete MQTT v3.1.1 packet handling (all packet types tested)
+- **Message routing system** with topic filtering and MQTT wildcard support (`+`, `#`)
+- Comprehensive test suite (33 tests: 10 router unit tests, 23 integration/packet tests)
 
 **❌ Missing for Milestone 1:**
-- Message routing system (biggest gap)
 - Clean session logic
 - Retained messages
 - Will messages
@@ -136,6 +134,8 @@ Default server runs on `127.0.0.1:1883` for MQTT clients.
 - **Shutdown Sequence**: Server → Brokers → Sessions with proper ordering
 - **Error Handling**: `handle_message` failures now terminate session loop
 - **Import Pattern**: Use `use crate::protocol::packet;` for module-level imports
+- **Router Architecture**: Uses RwLock with bidirectional mapping (filter→sessions, session→filters) for efficient routing and cleanup
+- **Wildcard Matching**: Implements MQTT-compliant topic matching with `+` (single-level) and `#` (multi-level) wildcards
 
 ### Common Issues and Solutions
 

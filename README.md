@@ -5,13 +5,15 @@ A high-performance MQTT server implementation in Rust using Tokio, designed for 
 ## Features
 
 ### Current (Milestone 1) 🔄
+- **MQTT v3.1.1 protocol support** with all packet types (CONNECT, CONNACK, PUBLISH, SUBSCRIBE, UNSUBSCRIBE, PINGREQ, PINGRESP, DISCONNECT)
+- **Message routing system** with topic filtering and MQTT wildcard support (`+` single-level, `#` multi-level)
 - **Event-driven architecture** with tokio::select! based packet handling
 - **Race-condition-free shutdown** using CancellationToken across all components
 - **Session management** with half-connected session tracking and proper cleanup
 - **Transport abstraction** supporting multiple protocols (TCP, WebSocket, TLS)
-- **Thread-safe operations** using DashMap and Arc for concurrent access
+- **Thread-safe operations** using RwLock and Arc for optimal concurrent access
 - **UNIX signal handling** (SIGINT graceful shutdown, SIGTERM immediate exit)
-- **Basic MQTT v3.1.1 protocol support** with CONNECT/CONNACK/PUBLISH packet handling
+- **Comprehensive testing** with 33 tests covering packet handling and routing
 
 ### Completed ✅
 - Multi-broker architecture with Server → Broker → Session hierarchy
@@ -25,8 +27,8 @@ A high-performance MQTT server implementation in Rust using Tokio, designed for 
 ### **Milestone 1**: Full MQTTv3 Server (QoS=0, no persistency/auth) 🔄
 - ✅ Basic working architecture
 - ✅ CONNECT, CONNACK, PUBLISH packet handling tested
-- 🔄 **Current**: Test all packet types (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
-- ❌ **Next**: Message routing system
+- ✅ All packet types tested (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
+- ✅ **Recently completed**: Message routing system with MQTT wildcard support (`+`, `#`)
 - ❌ Clean session logic
 - ❌ Retained messages
 - ❌ Will messages
