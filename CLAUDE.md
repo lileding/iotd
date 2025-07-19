@@ -16,7 +16,7 @@ cargo build --release
 cargo run
 
 # Run from release binary
-./target/release/iothub
+./target/release/iotd
 ```
 
 ### Testing
@@ -47,10 +47,10 @@ cargo bench broker_benchmark
 ### Docker
 ```bash
 # Build Docker image
-docker build -f docker/Dockerfile -t iothub .
+docker build -t iotd .
 
 # Run container
-docker run -p 1883:1883 iothub
+docker run -p 1883:1883 iotd
 ```
 
 ## Architecture Overview

@@ -1,6 +1,6 @@
-# IoTHub - High-Performance MQTT Server
+# IoTD - High-Performance MQTT Daemon
 
-A high-performance MQTT server implementation in Rust using Tokio, designed for scalability, reliability, and extensibility. Built with a modern async architecture supporting multiple transport protocols and thousands of concurrent connections.
+A high-performance MQTT server daemon implementation in Rust using Tokio, designed for scalability, reliability, and extensibility. Built with a modern async architecture supporting multiple transport protocols and thousands of concurrent connections.
 
 ## Features
 
@@ -68,7 +68,7 @@ A high-performance MQTT server implementation in Rust using Tokio, designed for 
 ## Architecture
 
 ```
-iothub/
+iotd/
 ├── src/
 │   ├── protocol/          # MQTT protocol implementation
 │   ├── server.rs          # Core server orchestration
@@ -136,7 +136,7 @@ cargo build --release
 ```bash
 cargo run
 # or
-./target/release/iothub
+./target/release/iotd
 ```
 
 The server will start on `localhost:1883` by default.
@@ -156,10 +156,10 @@ cargo test test_simple_connect
 ### Docker
 ```bash
 # Build image
-docker build -f docker/Dockerfile -t iothub .
+docker build -t iotd .
 
 # Run container
-docker run -p 1883:1883 iothub
+docker run -p 1883:1883 iotd
 ```
 
 ## Performance

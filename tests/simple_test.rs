@@ -6,9 +6,9 @@ use tokio::time::timeout;
 #[tokio::test]
 async fn test_simple_connect() {
     // Start server
-    let mut config = iothub::config::Config::default();
+    let mut config = iotd::config::Config::default();
     config.server.address = "127.0.0.1:0".to_string();
-    let server = iothub::server::start(config).await.unwrap();
+    let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
     // Give server time to start

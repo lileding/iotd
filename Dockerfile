@@ -1,8 +1,9 @@
-FROM rust:1.75-slim as builder
+FROM rust:slim as builder
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY benches ./benches
 
 RUN cargo build --release
 
@@ -12,10 +13,8 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
-COPY --from=builder /app/target/release/iothub /usr/local/bin/iothub
+COPY --from=builder /app/target/release/iotd /usr/local/bin/iotd
 
 EXPOSE 1883
 
-CMD ["iothub"]
+CMD ["iotd"]

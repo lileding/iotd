@@ -1,5 +1,5 @@
 use anyhow::Result;
-use iothub::config::{Config, ServerConfig, AuthConfig, StorageConfig, LoggingConfig};
+use iotd::config::{Config, ServerConfig};
 use tokio::signal;
 use tracing::{info, Level};
 use tracing_subscriber;
@@ -10,22 +10,16 @@ async fn main() -> Result<()> {
         .with_max_level(Level::INFO)
         .init();
 
-    info!("Starting IoTHub Server");
+    info!("Starting IoTD Server");
 
     let config = Config {
         server: ServerConfig {
-            address: "127.0.0.1:1883".to_string(),
-            max_connections: 0,
-            session_timeout_secs: 0,
-            keep_alive_timeout_secs: 0,
-            max_packet_size: 0,
-            retained_message_limit: 0,
+            address: "0.0.0.0:1883".to_string(),
+            ..Default::default()
         },
-        auth: AuthConfig::default(),
-        storage: StorageConfig::default(),
-        logging: LoggingConfig::default(),
+        ..Default::default()
     };
-    let server = iothub::server::start(config).await?;
+    let server = iotd::server::start(config).await?;
     
     // Wait for Ctrl+C
     signal::ctrl_c().await?;

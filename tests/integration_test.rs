@@ -18,9 +18,9 @@ pub fn init_test_logging() {
 async fn test_basic_connect_and_disconnect() {
     init_test_logging();
     // Start server
-    let mut config = iothub::config::Config::default();
+    let mut config = iotd::config::Config::default();
     config.server.address = "127.0.0.1:0".to_string();
-    let server = iothub::server::start(config).await.unwrap();
+    let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
     // Connect client
@@ -63,9 +63,9 @@ async fn test_basic_connect_and_disconnect() {
 async fn test_publish_subscribe() {
     init_test_logging();
     // Start server
-    let mut config = iothub::config::Config::default();
+    let mut config = iotd::config::Config::default();
     config.server.address = "127.0.0.1:0".to_string();
-    let server = iothub::server::start(config).await.unwrap();
+    let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
     // Connect subscriber first

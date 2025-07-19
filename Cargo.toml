@@ -1,12 +1,12 @@
 [package]
-name = "iothub"
+name = "iotd"
 version = "0.1.0"
 edition = "2021"
 authors = ["LI Leding <lileding@gmail.com>"]
-description = "High-performance MQTT server implementation in Rust"
+description = "High-performance MQTT server daemon in Rust"
 license = "MIT"
-repository = "https://github.com/yourusername/iothub"
-keywords = ["mqtt", "iot", "messaging", "broker", "server"]
+repository = "https://github.com/lileding/iotd"
+keywords = ["mqtt", "iot", "messaging", "broker", "daemon"]
 categories = ["network-programming", "asynchronous"]
 
 [dependencies]
