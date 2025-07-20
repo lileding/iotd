@@ -1,8 +1,8 @@
-# IoTHub Development Roadmap
+# IoTD Development Roadmap
 
 ## Overview
 
-IoTHub development follows a progressive milestone approach, where each milestone builds upon the previous one, adding new features while maintaining backward compatibility. This incremental approach ensures a stable foundation while continuously expanding capabilities.
+IoTD (IoT Daemon) development follows a progressive milestone approach, where each milestone builds upon the previous one, adding new features while maintaining backward compatibility. This incremental approach ensures a stable foundation while continuously expanding capabilities.
 
 ## Development Milestones
 
@@ -20,13 +20,11 @@ IoTHub development follows a progressive milestone approach, where each mileston
 - ✅ Thread-safe operations using DashMap and Arc
 - ✅ Transport abstraction layer for multiple protocols
 - ✅ Comprehensive configuration system with TOML support
-- ✅ Basic MQTT v3.1.1 packet handling (CONNECT, CONNACK, PUBLISH tested)
-
-**🔄 In Progress:**
-- 🔄 **Current**: Test all packet types (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
+- ✅ Complete MQTT v3.1.1 packet handling (all packet types tested)
+- ✅ **Message routing system** with topic filtering and MQTT wildcard support (`+`, `#`)
+- ✅ Comprehensive test suite (33 tests: 10 router unit tests, 23 integration/packet tests)
 
 **❌ Missing Core Features:**
-- ❌ **Message routing system** (biggest gap - route PUBLISH to subscribers)
 - ❌ Clean session logic (handle `clean_session=false`)
 - ❌ Retained messages (store and deliver to new subscribers)
 - ❌ Will messages (store on CONNECT, deliver on abnormal disconnect)
@@ -40,7 +38,7 @@ IoTHub development follows a progressive milestone approach, where each mileston
 - ✅ Thread-safe cleanup using lock-based swap pattern
 - ✅ Atomic operations for performance optimization
 
-**Timeline**: 4-6 weeks remaining
+**Timeline**: 2-3 weeks remaining
 **Success Criteria**:
 - [ ] All MQTT v3.1.1 packet types working
 - [ ] Message routing between clients functional

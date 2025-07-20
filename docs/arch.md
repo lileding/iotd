@@ -1,8 +1,8 @@
-# IoTHub Architecture
+# IoTD Architecture
 
 ## Overview
 
-IoTHub is a high-performance MQTT server implemented in Rust using Tokio for asynchronous I/O. The architecture features a Server → Broker → Session hierarchy designed for scalability, reliability, and extensibility with event-driven design and race-condition-free shutdown using CancellationToken.
+IoTD (IoT Daemon) is a high-performance MQTT server implemented in Rust using Tokio for asynchronous I/O. The architecture features a Server → Broker → Session hierarchy designed for scalability, reliability, and extensibility with event-driven design and race-condition-free shutdown using CancellationToken.
 
 ## Core Architecture
 
@@ -297,14 +297,12 @@ pub trait AsyncStream: Send + Sync {
 - Half-connected session tracking and cleanup
 - Stream deadlock prevention in packet handlers
 - UNIX signal handling (SIGINT graceful, SIGTERM immediate)
-- Basic MQTT v3.1.1 packet handling (CONNECT, CONNACK, PUBLISH tested)
+- Complete MQTT v3.1.1 packet handling (all packet types tested)
+- Message routing system with topic filtering and MQTT wildcard support
 - Session lifecycle management with proper cleanup
-
-### 🔄 In Progress
-- Testing all packet types (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
+- Comprehensive test suite (33 tests: 10 router unit tests, 23 integration/packet tests)
 
 ### ❌ Missing for Milestone 1
-- Message routing system (biggest gap)
 - Clean session logic
 - Retained messages
 - Will messages
