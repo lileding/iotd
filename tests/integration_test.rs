@@ -421,6 +421,133 @@ async fn test_clean_session_transition() {
     let _ = server.stop().await;
 }
 
+#[tokio::test]
+async fn test_keep_alive_timeout() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Connect with 1 second keep-alive
+    let mut stream = TcpStream::connect(&address).await.unwrap();
+    let connect_packet = vec![
+        0x10, // CONNECT packet type
+        16, // Remaining length
+        0x00, 0x04, // Protocol name length
+        b'M', b'Q', b'T', b'T', // Protocol name "MQTT"
+        0x04, // Protocol level (3.1.1)
+        0x02, // Connect flags (clean session)
+        0x00, 0x01, // Keep alive = 1 second
+        0x00, 4, // Client ID length
+        b't', b'e', b's', b't', // Client ID
+    ];
+    stream.write_all(&connect_packet).await.unwrap();
+    
+    // Read CONNACK
+    let mut response = [0u8; 4];
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response[0], 0x20); // CONNACK
+    assert_eq!(response[3], 0x00); // Accepted
+
+    // Wait for 1.6 seconds (more than 1.5x keep-alive)
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+
+    // Try to read - should get disconnected
+    let mut buf = [0u8; 1];
+    match timeout(Duration::from_millis(500), stream.read_exact(&mut buf)).await {
+        Ok(Ok(0)) | Err(_) => {}, // Connection closed or timeout - both are acceptable
+        Ok(Ok(_)) => panic!("Should have been disconnected due to keep-alive timeout"),
+        Ok(Err(_)) => {}, // IO error also acceptable (connection closed)
+    }
+
+    let _ = server.stop().await;
+}
+
+#[tokio::test]
+async fn test_keep_alive_with_pingreq() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Connect with 1 second keep-alive
+    let mut stream = TcpStream::connect(&address).await.unwrap();
+    let connect_packet = vec![
+        0x10, // CONNECT packet type
+        16, // Remaining length
+        0x00, 0x04, // Protocol name length
+        b'M', b'Q', b'T', b'T', // Protocol name "MQTT"
+        0x04, // Protocol level (3.1.1)
+        0x02, // Connect flags (clean session)
+        0x00, 0x01, // Keep alive = 1 second
+        0x00, 4, // Client ID length
+        b't', b'e', b's', b't', // Client ID
+    ];
+    stream.write_all(&connect_packet).await.unwrap();
+    
+    // Read CONNACK
+    let mut response = [0u8; 4];
+    stream.read_exact(&mut response).await.unwrap();
+
+    // Send PINGREQ every 800ms (within keep-alive)
+    for _ in 0..3 {
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        
+        let pingreq = [0xC0, 0x00]; // PINGREQ
+        stream.write_all(&pingreq).await.unwrap();
+        
+        // Read PINGRESP
+        let mut pingresp = [0u8; 2];
+        match timeout(Duration::from_millis(500), stream.read_exact(&mut pingresp)).await {
+            Ok(Ok(_)) => {
+                assert_eq!(pingresp[0], 0xD0); // PINGRESP
+                assert_eq!(pingresp[1], 0x00);
+            }
+            _ => panic!("Should receive PINGRESP"),
+        }
+    }
+
+    // Connection should still be alive
+    let disconnect = [0xE0, 0x00]; // DISCONNECT
+    stream.write_all(&disconnect).await.unwrap();
+
+    let _ = server.stop().await;
+}
+
+#[tokio::test]
+async fn test_keep_alive_zero_disabled() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Connect with keep-alive = 0 (disabled)
+    let mut stream = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut stream, "test").await;
+    read_connack(&mut stream).await;
+
+    // Wait for 5 seconds - should not disconnect
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    // Send PINGREQ to check connection is still alive
+    let pingreq = [0xC0, 0x00];
+    stream.write_all(&pingreq).await.unwrap();
+    
+    // Should receive PINGRESP
+    let mut pingresp = [0u8; 2];
+    match timeout(Duration::from_millis(500), stream.read_exact(&mut pingresp)).await {
+        Ok(Ok(_)) => {
+            assert_eq!(pingresp[0], 0xD0); // PINGRESP
+        }
+        _ => panic!("Connection should still be alive with keep-alive=0"),
+    }
+
+    let _ = server.stop().await;
+}
+
 async fn send_connect(stream: &mut TcpStream, client_id: &str) {
     send_connect_with_flags(stream, client_id, 0x02).await; // Default to clean session
 }

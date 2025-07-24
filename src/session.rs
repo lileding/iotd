@@ -4,7 +4,7 @@ use crate::{
     transport::AsyncStream,
 };
 use std::sync::{atomic::{AtomicBool, AtomicU16, Ordering}, Arc};
-use tokio::{io::AsyncWriteExt, sync::{mpsc, Mutex}, task::JoinHandle};
+use tokio::{io::AsyncWriteExt, sync::{mpsc, Mutex}, task::JoinHandle, time::Duration};
 use tracing::{debug, info, error};
 use uuid::Uuid;
 use thiserror::Error;
@@ -164,9 +164,24 @@ impl Session {
         let mut command_rx = self.command_rx.lock().await;
         let mut next_state = State::Cleanup;
 
+        // Keep-alive setup
+        let keep_alive_secs = self.keep_alive.load(Ordering::Acquire);
+        let keep_alive_timeout = if keep_alive_secs > 0 {
+            // MQTT spec: disconnect if no packet received within 1.5x keep-alive interval
+            Duration::from_millis(keep_alive_secs as u64 * 1500)
+        } else {
+            Duration::from_secs(3600 * 24 * 365) // Effectively infinite (1 year)
+        };
+
+        let mut keep_alive_interval = tokio::time::interval(keep_alive_timeout);
+        keep_alive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Skip the first tick since interval fires immediately on creation
+        keep_alive_interval.tick().await;
+        
         loop {
             tokio::select! {
                 pack = packet::Packet::decode(&mut reader) => {
+                    keep_alive_interval.reset(); // Reset the interval on any packet
                     let success = match pack {
                         Ok(pack) => {
                             self.on_packet(pack).await.unwrap_or_else(|e| {
@@ -224,6 +239,18 @@ impl Session {
 
                     // Always break for any reason
                     break;
+                }
+
+                _ = keep_alive_interval.tick() => {
+                    if keep_alive_secs > 0 {
+                        info!("Keep-alive timeout for session {} ({}s without activity)", 
+                              self.id(), keep_alive_secs);
+                        if !self.clean_session.load(Ordering::Acquire) {
+                            next_state = State::WaitTakeover;
+                        }
+                        break;
+                    }
+                    // If keep_alive_secs == 0, this tick is ignored (infinite timeout)
                 }
             }
         }
