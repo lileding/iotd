@@ -137,6 +137,17 @@ Optimized for:
 - **High throughput**: Lock-free concurrent operations
 - **Single binary**: No external dependencies in runtime
 
+### Benchmark Results
+
+Tested on Mac Studio 2025 (M4 Max 16-core) with `RUST_LOG=error`:
+
+- **Memory efficiency**: Only 8.45 KB per connection
+- **1000 connections**: ~10 MB total memory usage
+- **Throughput**: 8,600+ messages/second routed to 950 subscribers
+- **Message rate**: 4,000-9,000 msg/sec for small messages
+
+For detailed benchmarks and testing tools, see [BENCHMARKS.md](BENCHMARKS.md).
+
 ## MQTT Client Testing
 
 You can test with any MQTT client:

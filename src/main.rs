@@ -47,8 +47,14 @@ async fn main() -> Result<()> {
         }
     }
     
+    // Use RUST_LOG env var if set, otherwise default to INFO
+    let log_level = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|s| s.parse::<Level>().ok())
+        .unwrap_or(Level::INFO);
+    
     tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
+        .with_max_level(log_level)
         .init();
 
     info!("Starting IoTD Server v{}-{}", VERSION, GIT_REVISION);
