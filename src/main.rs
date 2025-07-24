@@ -18,23 +18,30 @@ fn print_help() {
     println!("A high-performance MQTT v3.1.1 server daemon implementation in Rust.");
     println!("Supports thousands of concurrent connections with low latency message routing.");
     println!();
-    println!("By default, the server listens on 0.0.0.0:1883 for MQTT connections.");
-    println!();
     println!("USAGE:");
     println!("    iotd [OPTIONS]");
     println!();
     println!("OPTIONS:");
-    println!("    -h, --help       Print help information");
-    println!("    -v, --version    Print version information");
+    println!("    -h, --help              Print help information");
+    println!("    -v, --version           Print version information");
+    println!("    -l, --listen <ADDRESS>  Listen address (default: 127.0.0.1:1883)");
+    println!();
+    println!("EXAMPLES:");
+    println!("    iotd                    # Listen on 127.0.0.1:1883");
+    println!("    iotd -l 0.0.0.0:1883    # Listen on all interfaces");
+    println!("    iotd -l [::]:1883       # Listen on all interfaces (IPv6)");
+    println!("    iotd -l [::1]:1883      # Listen on localhost (IPv6)");
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Parse arguments manually to handle version and help
+    // Parse arguments manually to handle version, help, and listen address
     let args: Vec<String> = std::env::args().collect();
+    let mut listen_address = "127.0.0.1:1883".to_string();
     
-    for arg in &args[1..] {
-        match arg.as_str() {
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
             "-v" | "--version" => {
                 print_version();
                 return Ok(());
@@ -43,8 +50,23 @@ async fn main() -> Result<()> {
                 print_help();
                 return Ok(());
             }
-            _ => {}
+            "-l" | "--listen" => {
+                if i + 1 < args.len() {
+                    listen_address = args[i + 1].clone();
+                    i += 1; // Skip the next argument as it's the address
+                } else {
+                    eprintln!("Error: -l/--listen requires an address argument");
+                    print_help();
+                    return Ok(());
+                }
+            }
+            arg => {
+                eprintln!("Error: Unknown argument '{}'", arg);
+                print_help();
+                return Ok(());
+            }
         }
+        i += 1;
     }
     
     // Use RUST_LOG env var if set, otherwise default to INFO
@@ -58,10 +80,11 @@ async fn main() -> Result<()> {
         .init();
 
     info!("Starting IoTD Server v{}-{}", VERSION, GIT_REVISION);
+    info!("Listening on: {}", listen_address);
 
     let config = Config {
         server: ServerConfig {
-            address: "0.0.0.0:1883".to_string(),
+            address: listen_address,
             ..Default::default()
         },
         ..Default::default()

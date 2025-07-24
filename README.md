@@ -67,6 +67,11 @@ IoTD has been manually tested and verified to work on the following platforms:
 - **Linux GNU (x86_64)** - Intel/AMD 64-bit with glibc
 - **Linux musl (x86_64)** - Intel/AMD 64-bit with musl libc (Alpine Linux)
 
+### Network Support
+- **IPv4** - Full support on all platforms
+- **IPv6** - Full support on all platforms
+- **Dual-stack** - Can listen on both IPv4 and IPv6 simultaneously
+
 The single binary design and Rust's cross-platform capabilities ensure consistent behavior across all supported platforms.
 
 ## Architecture
@@ -101,12 +106,22 @@ cargo build --release
 
 ### Running
 ```bash
+# Default (localhost only)
 cargo run
 # or
 ./target/release/iotd
+
+# Custom listen address
+./target/release/iotd -l 0.0.0.0:1883    # All IPv4 interfaces
+./target/release/iotd -l [::]:1883       # All IPv6 interfaces
+./target/release/iotd -l 127.0.0.1:8883  # Custom port
+
+# Help and version
+./target/release/iotd --help
+./target/release/iotd --version
 ```
 
-The server will start on `localhost:1883` by default.
+The server listens on `127.0.0.1:1883` by default (localhost only).
 
 ### Testing
 ```bash
