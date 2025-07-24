@@ -1,5 +1,5 @@
 use crate::protocol::packet::{QoS, PublishPacket};
-use crate::protocol::v3::subscribe_return_codes::MAXIMUM_QOS_0;
+use crate::protocol::v3::subscribe_return_codes::{MAXIMUM_QOS_0, FAILURE};
 use crate::protocol::Packet;
 use crate::session::Mailbox;
 use std::collections::{HashSet, HashMap};
@@ -32,6 +32,54 @@ impl Router {
         }
     }
 
+    /// Validates a topic name according to MQTT v3.1.1 specification
+    fn is_valid_topic_name(topic: &str) -> bool {
+        // Topic name must not be empty
+        if topic.is_empty() {
+            return false;
+        }
+
+        // Topic name must not contain null characters
+        if topic.contains('\0') {
+            return false;
+        }
+
+        // Topic name must be valid UTF-8 (already guaranteed by Rust String)
+        // Maximum topic length is 65535 bytes (handled by packet decoder)
+
+        true
+    }
+
+    /// Validates a topic filter (subscription pattern)
+    fn is_valid_topic_filter(filter: &str) -> bool {
+        // Topic filter must not be empty
+        if filter.is_empty() {
+            return false;
+        }
+
+        // Topic filter must not contain null characters
+        if filter.contains('\0') {
+            return false;
+        }
+
+        // Validate wildcard usage
+        let levels: Vec<&str> = filter.split('/').collect();
+        for (i, level) in levels.iter().enumerate() {
+            // Multi-level wildcard # must be last character
+            if level.contains('#') {
+                if *level != "#" || i != levels.len() - 1 {
+                    return false;
+                }
+            }
+            // Single-level wildcard + must be whole level
+            if level.contains('+') && *level != "+" {
+                return false;
+            }
+        }
+
+        true
+    }
+
     pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &Vec<(String, QoS)>) -> (Vec<u8>, Vec<PublishPacket>) {
         info!("Session {} subscribing to {} topics", session_id, topic_filters.len());
 
@@ -42,6 +90,13 @@ impl Router {
             let mut router = self.data.write().await;
 
             for filter in topic_filters.iter() {
+                // Validate topic filter
+                if !Self::is_valid_topic_filter(&filter.0) {
+                    info!("Invalid topic filter: {}", filter.0);
+                    return_codes.push(FAILURE);
+                    continue;
+                }
+
                 // Store filters -> (session_id -> sender)
                 router.filters.entry(filter.0.to_string()).or_insert(HashMap::new())
                     .insert(session_id.to_owned(), sender.clone());
@@ -94,6 +149,12 @@ impl Router {
     }
 
     pub async fn route(&self, packet: PublishPacket) {
+        // Validate topic name
+        if !Self::is_valid_topic_name(&packet.topic) {
+            info!("Invalid topic name in PUBLISH: {}", packet.topic);
+            return;
+        }
+
         // Handle retained message storage
         if packet.retain {
             let mut router = self.data.write().await;
@@ -402,5 +463,114 @@ mod tests {
         assert!(!Router::topic_matches("a/b", "a"));
         assert!(Router::topic_matches("a/b/c", "a/#"));
         assert!(Router::topic_matches("a/b/c", "#"));
+    }
+
+    #[test]
+    fn test_valid_topic_names() {
+        // Valid topic names
+        assert!(Router::is_valid_topic_name("home/temperature"));
+        assert!(Router::is_valid_topic_name("a"));
+        assert!(Router::is_valid_topic_name("a/b/c/d/e/f"));
+        assert!(Router::is_valid_topic_name("/"));
+        assert!(Router::is_valid_topic_name("home/"));
+        assert!(Router::is_valid_topic_name("/home"));
+        assert!(Router::is_valid_topic_name("测试")); // UTF-8
+        assert!(Router::is_valid_topic_name("🚀")); // Emoji
+        assert!(Router::is_valid_topic_name("home/kitchen/temperature/°C"));
+        
+        // Topics can contain wildcards when publishing (they're just literal characters)
+        assert!(Router::is_valid_topic_name("home/+/temp"));
+        assert!(Router::is_valid_topic_name("home/#"));
+    }
+
+    #[test]
+    fn test_invalid_topic_names() {
+        // Empty topic
+        assert!(!Router::is_valid_topic_name(""));
+        
+        // Contains null character
+        assert!(!Router::is_valid_topic_name("home\0temperature"));
+        assert!(!Router::is_valid_topic_name("\0"));
+        assert!(!Router::is_valid_topic_name("home/\0/temp"));
+    }
+
+    #[test]
+    fn test_valid_topic_filters() {
+        // Valid filters without wildcards
+        assert!(Router::is_valid_topic_filter("home/temperature"));
+        assert!(Router::is_valid_topic_filter("a"));
+        assert!(Router::is_valid_topic_filter("/"));
+        assert!(Router::is_valid_topic_filter("home/"));
+        assert!(Router::is_valid_topic_filter("/home"));
+        
+        // Valid single-level wildcards
+        assert!(Router::is_valid_topic_filter("+"));
+        assert!(Router::is_valid_topic_filter("home/+/temperature"));
+        assert!(Router::is_valid_topic_filter("+/+/+"));
+        assert!(Router::is_valid_topic_filter("home/+"));
+        assert!(Router::is_valid_topic_filter("+/temperature"));
+        
+        // Valid multi-level wildcards
+        assert!(Router::is_valid_topic_filter("#"));
+        assert!(Router::is_valid_topic_filter("home/#"));
+        assert!(Router::is_valid_topic_filter("home/kitchen/#"));
+        assert!(Router::is_valid_topic_filter("+/#"));
+        assert!(Router::is_valid_topic_filter("+/+/#"));
+        
+        // UTF-8 is valid
+        assert!(Router::is_valid_topic_filter("测试/+/#"));
+        assert!(Router::is_valid_topic_filter("🚀/#"));
+    }
+
+    #[test]
+    fn test_invalid_topic_filters() {
+        // Empty filter
+        assert!(!Router::is_valid_topic_filter(""));
+        
+        // Contains null character
+        assert!(!Router::is_valid_topic_filter("home\0temperature"));
+        assert!(!Router::is_valid_topic_filter("\0"));
+        assert!(!Router::is_valid_topic_filter("home/\0/temp"));
+        
+        // Invalid single-level wildcard usage
+        assert!(!Router::is_valid_topic_filter("home/+a/temp")); // + not alone
+        assert!(!Router::is_valid_topic_filter("home/a+/temp")); // + not alone
+        assert!(!Router::is_valid_topic_filter("home/++/temp")); // + not alone
+        assert!(!Router::is_valid_topic_filter("home/+abc/temp")); // + not alone
+        
+        // Invalid multi-level wildcard usage
+        assert!(!Router::is_valid_topic_filter("home/#/temp")); // # must be last
+        assert!(!Router::is_valid_topic_filter("home/a#")); // # not alone
+        assert!(!Router::is_valid_topic_filter("home/#a")); // # not alone
+        assert!(!Router::is_valid_topic_filter("home/##")); // # not alone
+        assert!(!Router::is_valid_topic_filter("#/home")); // # must be last
+        assert!(!Router::is_valid_topic_filter("home/kitchen/#/room")); // # must be last
+    }
+
+    #[test]
+    fn test_edge_case_validation() {
+        // Just slashes
+        assert!(Router::is_valid_topic_name("/"));
+        assert!(Router::is_valid_topic_name("//"));
+        assert!(Router::is_valid_topic_name("///"));
+        assert!(Router::is_valid_topic_filter("/"));
+        assert!(Router::is_valid_topic_filter("//"));
+        assert!(Router::is_valid_topic_filter("///"));
+        
+        // Wildcards at boundaries
+        assert!(Router::is_valid_topic_filter("/+"));
+        assert!(Router::is_valid_topic_filter("+/"));
+        assert!(Router::is_valid_topic_filter("/+/"));
+        assert!(Router::is_valid_topic_filter("/#"));
+        assert!(Router::is_valid_topic_filter("/+/#"));
+        
+        // Multiple # in different levels (still invalid)
+        assert!(!Router::is_valid_topic_filter("#/#"));
+        assert!(!Router::is_valid_topic_filter("home/#/#"));
+        
+        // Mixed valid and invalid patterns
+        assert!(Router::is_valid_topic_filter("home/+/kitchen/+/sensor"));
+        assert!(!Router::is_valid_topic_filter("home/+/kitchen/#/sensor"));
+        assert!(!Router::is_valid_topic_filter("home/+a/kitchen/+/sensor"));
     }
 }

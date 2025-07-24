@@ -145,7 +145,7 @@ async fn test_connect_with_client_id() {
     let mut stream = connect_to_server(&address).await;
     
     // Send CONNECT with client ID
-    let connect_packet = create_connect_packet("test_client", true, 60);
+    let connect_packet = create_connect_packet("testclient", true, 60);
     stream.write_all(&connect_packet).await.unwrap();
     
     // Read CONNACK
@@ -181,7 +181,7 @@ async fn test_connect_clean_session_flag() {
     let mut stream = connect_to_server(&address).await;
     
     // Send CONNECT with clean_session = false
-    let connect_packet = create_connect_packet("test_client", false, 60);
+    let connect_packet = create_connect_packet("testclient", false, 60);
     stream.write_all(&connect_packet).await.unwrap();
     
     // Read CONNACK
@@ -197,7 +197,7 @@ async fn test_connect_duplicate_client_id() {
     
     // First connection
     let mut stream1 = connect_to_server(&address).await;
-    let connect_packet = create_connect_packet("duplicate_client", true, 60);
+    let connect_packet = create_connect_packet("duplicateclient", true, 60);
     stream1.write_all(&connect_packet).await.unwrap();
     let _response1 = read_packet_with_timeout(&mut stream1, Duration::from_secs(2)).await.unwrap();
     
@@ -416,7 +416,7 @@ async fn test_pingreq_pingresp() {
     let mut stream = connect_to_server(&address).await;
     
     // Connect first
-    let connect_packet = create_connect_packet("ping_client", true, 60);
+    let connect_packet = create_connect_packet("pingclient", true, 60);
     stream.write_all(&connect_packet).await.unwrap();
     let _connack = read_packet_with_timeout(&mut stream, Duration::from_secs(2)).await.unwrap();
     
@@ -438,7 +438,7 @@ async fn test_multiple_pingreq() {
     let mut stream = connect_to_server(&address).await;
     
     // Connect first
-    let connect_packet = create_connect_packet("ping_client", true, 60);
+    let connect_packet = create_connect_packet("pingclient", true, 60);
     stream.write_all(&connect_packet).await.unwrap();
     let _connack = read_packet_with_timeout(&mut stream, Duration::from_secs(2)).await.unwrap();
     
@@ -465,7 +465,7 @@ async fn test_disconnect() {
     let mut stream = connect_to_server(&address).await;
     
     // Connect first
-    let connect_packet = create_connect_packet("disconnect_client", true, 60);
+    let connect_packet = create_connect_packet("disconnectclient", true, 60);
     stream.write_all(&connect_packet).await.unwrap();
     let _connack = read_packet_with_timeout(&mut stream, Duration::from_secs(2)).await.unwrap();
     
@@ -497,7 +497,7 @@ async fn test_invalid_packet_type() {
     let mut stream = connect_to_server(&address).await;
     
     // Connect first
-    let connect_packet = create_connect_packet("invalid_client", true, 60);
+    let connect_packet = create_connect_packet("invalidclient", true, 60);
     stream.write_all(&connect_packet).await.unwrap();
     let _connack = read_packet_with_timeout(&mut stream, Duration::from_secs(2)).await.unwrap();
     
@@ -517,7 +517,7 @@ async fn test_malformed_packet() {
     let mut stream = connect_to_server(&address).await;
     
     // Connect first
-    let connect_packet = create_connect_packet("malformed_client", true, 60);
+    let connect_packet = create_connect_packet("malformedclient", true, 60);
     stream.write_all(&connect_packet).await.unwrap();
     let _connack = read_packet_with_timeout(&mut stream, Duration::from_secs(2)).await.unwrap();
     
@@ -556,7 +556,7 @@ async fn test_large_packet() {
     let mut stream = connect_to_server(&address).await;
     
     // Connect first
-    let connect_packet = create_connect_packet("large_client", true, 60);
+    let connect_packet = create_connect_packet("largeclient", true, 60);
     stream.write_all(&connect_packet).await.unwrap();
     let _connack = read_packet_with_timeout(&mut stream, Duration::from_secs(2)).await.unwrap();
     

@@ -1106,3 +1106,279 @@ async fn test_will_message_on_keepalive_timeout() {
 
     let _ = server.stop().await;
 }
+
+#[tokio::test]
+async fn test_protocol_validation() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Test 1: Invalid protocol name
+    let mut client = TcpStream::connect(&address).await.unwrap();
+    
+    let mut connect_packet = vec![
+        0x10, // CONNECT packet type
+        0x00, // Remaining length (will update)
+    ];
+    
+    // Variable header
+    connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
+    connect_packet.extend_from_slice(b"HTTP"); // Wrong protocol name
+    connect_packet.push(0x04); // Protocol level
+    connect_packet.push(0x02); // Connect flags: Clean session=1
+    connect_packet.extend_from_slice(&[0x00, 0x3C]); // Keep-alive = 60
+    
+    // Payload
+    connect_packet.extend_from_slice(&[0x00, 0x04]); // Client ID length
+    connect_packet.extend_from_slice(b"test"); // Client ID
+    
+    // Update remaining length
+    let remaining_len = connect_packet.len() - 2;
+    connect_packet[1] = remaining_len as u8;
+    
+    client.write_all(&connect_packet).await.unwrap();
+    
+    // Should receive CONNACK with error code 0x01
+    let mut connack = vec![0u8; 4];
+    client.read_exact(&mut connack).await.unwrap();
+    assert_eq!(connack[0], 0x20); // CONNACK
+    assert_eq!(connack[3], 0x01); // UNACCEPTABLE_PROTOCOL_VERSION
+    
+    // Connection should be closed
+    let mut buf = [0u8; 1];
+    assert!(client.read(&mut buf).await.unwrap() == 0);
+
+    // Test 2: Invalid protocol level
+    let mut client = TcpStream::connect(&address).await.unwrap();
+    
+    let mut connect_packet = vec![
+        0x10, // CONNECT packet type
+        0x00, // Remaining length (will update)
+    ];
+    
+    // Variable header
+    connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
+    connect_packet.extend_from_slice(b"MQTT"); // Correct protocol name
+    connect_packet.push(0x03); // Wrong protocol level (3 instead of 4)
+    connect_packet.push(0x02); // Connect flags: Clean session=1
+    connect_packet.extend_from_slice(&[0x00, 0x3C]); // Keep-alive = 60
+    
+    // Payload
+    connect_packet.extend_from_slice(&[0x00, 0x04]); // Client ID length
+    connect_packet.extend_from_slice(b"test"); // Client ID
+    
+    // Update remaining length
+    let remaining_len = connect_packet.len() - 2;
+    connect_packet[1] = remaining_len as u8;
+    
+    client.write_all(&connect_packet).await.unwrap();
+    
+    // Should receive CONNACK with error code 0x01
+    let mut connack = vec![0u8; 4];
+    client.read_exact(&mut connack).await.unwrap();
+    assert_eq!(connack[0], 0x20); // CONNACK
+    assert_eq!(connack[3], 0x01); // UNACCEPTABLE_PROTOCOL_VERSION
+    
+    // Connection should be closed
+    let mut buf = [0u8; 1];
+    assert!(client.read(&mut buf).await.unwrap() == 0);
+
+    let _ = server.stop().await;
+}
+
+#[tokio::test]
+async fn test_client_id_validation() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Test 1: Client ID too long (more than 23 bytes)
+    let mut client = TcpStream::connect(&address).await.unwrap();
+    
+    let mut connect_packet = vec![
+        0x10, // CONNECT packet type
+        0x00, // Remaining length (will update)
+    ];
+    
+    // Variable header
+    connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
+    connect_packet.extend_from_slice(b"MQTT"); // Protocol name
+    connect_packet.push(0x04); // Protocol level
+    connect_packet.push(0x02); // Connect flags: Clean session=1
+    connect_packet.extend_from_slice(&[0x00, 0x3C]); // Keep-alive = 60
+    
+    // Payload with long client ID
+    let long_client_id = "a".repeat(24); // 24 bytes, exceeds limit
+    connect_packet.extend_from_slice(&[0x00, 0x18]); // Client ID length = 24
+    connect_packet.extend_from_slice(long_client_id.as_bytes());
+    
+    // Update remaining length
+    let remaining_len = connect_packet.len() - 2;
+    connect_packet[1] = remaining_len as u8;
+    
+    client.write_all(&connect_packet).await.unwrap();
+    
+    // Should receive CONNACK with error code 0x02
+    let mut connack = vec![0u8; 4];
+    client.read_exact(&mut connack).await.unwrap();
+    assert_eq!(connack[0], 0x20); // CONNACK
+    assert_eq!(connack[3], 0x02); // IDENTIFIER_REJECTED
+    
+    // Connection should be closed
+    let mut buf = [0u8; 1];
+    assert!(client.read(&mut buf).await.unwrap() == 0);
+
+    // Test 2: Client ID with invalid characters
+    let mut client = TcpStream::connect(&address).await.unwrap();
+    
+    let mut connect_packet = vec![
+        0x10, // CONNECT packet type
+        0x00, // Remaining length (will update)
+    ];
+    
+    // Variable header
+    connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
+    connect_packet.extend_from_slice(b"MQTT"); // Protocol name
+    connect_packet.push(0x04); // Protocol level
+    connect_packet.push(0x02); // Connect flags: Clean session=1
+    connect_packet.extend_from_slice(&[0x00, 0x3C]); // Keep-alive = 60
+    
+    // Payload with invalid client ID
+    connect_packet.extend_from_slice(&[0x00, 0x07]); // Client ID length
+    connect_packet.extend_from_slice(b"test-id"); // Contains hyphen (invalid)
+    
+    // Update remaining length
+    let remaining_len = connect_packet.len() - 2;
+    connect_packet[1] = remaining_len as u8;
+    
+    client.write_all(&connect_packet).await.unwrap();
+    
+    // Should receive CONNACK with error code 0x02
+    let mut connack = vec![0u8; 4];
+    client.read_exact(&mut connack).await.unwrap();
+    assert_eq!(connack[0], 0x20); // CONNACK
+    assert_eq!(connack[3], 0x02); // IDENTIFIER_REJECTED
+    
+    // Connection should be closed
+    let mut buf = [0u8; 1];
+    assert!(client.read(&mut buf).await.unwrap() == 0);
+
+    // Test 3: Valid client ID should work
+    let mut client = TcpStream::connect(&address).await.unwrap();
+    
+    let mut connect_packet = vec![
+        0x10, // CONNECT packet type
+        0x00, // Remaining length (will update)
+    ];
+    
+    // Variable header
+    connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
+    connect_packet.extend_from_slice(b"MQTT"); // Protocol name
+    connect_packet.push(0x04); // Protocol level
+    connect_packet.push(0x02); // Connect flags: Clean session=1
+    connect_packet.extend_from_slice(&[0x00, 0x3C]); // Keep-alive = 60
+    
+    // Payload with valid client ID
+    connect_packet.extend_from_slice(&[0x00, 0x09]); // Client ID length
+    connect_packet.extend_from_slice(b"Client123"); // Valid: alphanumeric only
+    
+    // Update remaining length
+    let remaining_len = connect_packet.len() - 2;
+    connect_packet[1] = remaining_len as u8;
+    
+    client.write_all(&connect_packet).await.unwrap();
+    
+    // Should receive CONNACK with success
+    let mut connack = vec![0u8; 4];
+    client.read_exact(&mut connack).await.unwrap();
+    assert_eq!(connack[0], 0x20); // CONNACK
+    assert_eq!(connack[3], 0x00); // ACCEPTED
+
+    let _ = server.stop().await;
+}
+
+#[tokio::test]
+async fn test_topic_validation() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Connect successfully first
+    let mut client = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut client, "validator").await;
+    read_connack(&mut client).await;
+
+    // Test 1: Subscribe with invalid wildcard usage
+    let mut subscribe_packet = vec![
+        0x82, // SUBSCRIBE packet type with QoS=1
+        0x00, // Remaining length (will update)
+    ];
+    
+    // Variable header
+    subscribe_packet.extend_from_slice(&[0x00, 0x01]); // Packet ID
+    
+    // Payload with invalid topic filter
+    subscribe_packet.extend_from_slice(&[0x00, 0x07]); // Topic length
+    subscribe_packet.extend_from_slice(b"test/+a"); // Invalid: + not alone in level
+    subscribe_packet.push(0x00); // QoS 0
+    
+    // Update remaining length
+    let remaining_len = subscribe_packet.len() - 2;
+    subscribe_packet[1] = remaining_len as u8;
+    
+    client.write_all(&subscribe_packet).await.unwrap();
+    
+    // Read SUBACK
+    let mut header = [0u8; 2];
+    client.read_exact(&mut header).await.unwrap();
+    assert_eq!(header[0], 0x90); // SUBACK
+    
+    let remaining_len = header[1] as usize;
+    let mut payload = vec![0u8; remaining_len];
+    client.read_exact(&mut payload).await.unwrap();
+    
+    assert_eq!(payload[0], 0x00); // Packet ID MSB
+    assert_eq!(payload[1], 0x01); // Packet ID LSB
+    assert_eq!(payload[2], 0x80); // FAILURE
+
+    // Test 2: Subscribe with # not at end
+    let mut subscribe_packet = vec![
+        0x82, // SUBSCRIBE packet type with QoS=1
+        0x00, // Remaining length (will update)
+    ];
+    
+    // Variable header
+    subscribe_packet.extend_from_slice(&[0x00, 0x02]); // Packet ID
+    
+    // Payload with invalid topic filter
+    subscribe_packet.extend_from_slice(&[0x00, 0x08]); // Topic length
+    subscribe_packet.extend_from_slice(b"test/#/a"); // Invalid: # not at end
+    subscribe_packet.push(0x00); // QoS 0
+    
+    // Update remaining length
+    let remaining_len = subscribe_packet.len() - 2;
+    subscribe_packet[1] = remaining_len as u8;
+    
+    client.write_all(&subscribe_packet).await.unwrap();
+    
+    // Read SUBACK
+    let mut header = [0u8; 2];
+    client.read_exact(&mut header).await.unwrap();
+    assert_eq!(header[0], 0x90); // SUBACK
+    
+    let remaining_len = header[1] as usize;
+    let mut payload = vec![0u8; remaining_len];
+    client.read_exact(&mut payload).await.unwrap();
+    
+    assert_eq!(payload[0], 0x00); // Packet ID MSB
+    assert_eq!(payload[1], 0x02); // Packet ID LSB
+    assert_eq!(payload[2], 0x80); // FAILURE
+
+    let _ = server.stop().await;
+}

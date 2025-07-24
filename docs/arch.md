@@ -136,14 +136,14 @@ The Router implements MQTT's publish/subscribe pattern with advanced features:
 #### Data Structures
 ```rust
 pub struct Router {
-    subscriptions: Arc<RwLock<SubscriptionTree>>,
-    retained_messages: Arc<RwLock<HashMap<String, RetainedMessage>>>,
-    retained_limit: usize,
+    data: RwLock<RouterInternal>,
+    retained_message_limit: usize,
 }
 
-struct SubscriptionTree {
-    topic_filters: HashMap<String, HashSet<String>>,  // filter → sessions
-    session_filters: HashMap<String, HashSet<String>>, // session → filters
+struct RouterInternal {
+    filters: HashMap<String, HashMap<String, Mailbox>>,    // filter → (session_id → mailbox)
+    sessions: HashMap<String, HashSet<String>>,            // session_id → filters
+    retained_messages: HashMap<String, PublishPacket>,     // topic → retained message
 }
 ```
 
@@ -151,11 +151,16 @@ struct SubscriptionTree {
 - **Single-level wildcard (`+`)**: Matches exactly one topic level
 - **Multi-level wildcard (`#`)**: Matches any number of levels (must be last)
 
+#### Topic Validation
+- **Topic Names**: Must not be empty, must not contain null characters
+- **Topic Filters**: Same as names plus wildcard validation rules
+- **Protocol Compliance**: Full MQTT v3.1.1 specification adherence
+
 #### Topic Matching Algorithm
 1. Exact match check
-2. Pattern matching with wildcards
-3. Special handling for `$SYS/` topics
-4. Efficient trie-like traversal
+2. Pattern matching with wildcards using recursive algorithm
+3. Efficient bidirectional mapping for fast subscribe/unsubscribe
+4. Support for all MQTT wildcard combinations
 
 ### Transport Layer (`src/transport.rs`)
 
@@ -288,14 +293,16 @@ To prevent deadlocks, locks are acquired in a consistent order:
 
 ### Unit Tests
 - Packet encoding/decoding (31 tests)
-- Router wildcard matching (10 tests)
+- Router wildcard matching and topic validation (15 tests)
 - Component isolation tests
 
 ### Integration Tests
-- Full protocol flows (26 tests)
+- Full protocol flows (29 tests)
 - Session lifecycle scenarios
 - Error handling paths
 - Will message delivery
+- Protocol compliance validation
+- Topic validation in routing
 
 ### Performance Tests
 - Throughput benchmarks

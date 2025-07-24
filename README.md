@@ -1,5 +1,15 @@
 # IoTD - High-Performance MQTT Daemon
 
+```
+    ___     _____     ____  
+   |_ _|___/__   \   |  _ \ 
+    | |/ _ \ / /\ /  | | | |
+    | | (_) / /  \ \ | |_| |
+   |___\___/\/    \_\|____/ 
+                            
+   IoT Daemon - MQTT Server
+```
+
 A high-performance MQTT server daemon implementation in Rust using Tokio, designed for scalability, reliability, and extensibility. Built with a modern async architecture supporting multiple transport protocols and thousands of concurrent connections.
 
 ## Features
@@ -16,11 +26,13 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 - **Thread-safe operations** with optimal concurrent access patterns
 - **UNIX signal handling** (SIGINT graceful, SIGTERM immediate)
 - **Comprehensive configuration** with TOML support
-- **Extensive test coverage** with 67 tests validating all functionality
+- **Extensive test coverage** with 74 tests validating all functionality
 
 ## Current Status
 
-IoTD is currently in **Milestone 1** development, implementing a full MQTT v3.1.1 server with QoS=0 support.
+**IoTD has successfully completed Milestone 1! 🎉**
+
+The project now provides a fully functional MQTT v3.1.1 server with QoS=0 support, ready for development and testing use cases.
 
 ### Completed Features ✅
 - **Complete MQTT v3.1.1 protocol support** with all packet types
@@ -29,20 +41,33 @@ IoTD is currently in **Milestone 1** development, implementing a full MQTT v3.1.
 - **Keep-alive mechanism** with configurable timeouts and automatic cleanup
 - **Retained messages** with storage limits and wildcard delivery
 - **Will messages** (Last Will and Testament) support
+- **Protocol compliance** with validation, error codes, and client ID rules
+- **Topic validation** for both topic names and subscription filters
 - **Race-condition-free architecture** using CancellationToken
-- **Comprehensive test suite** with 67 tests (31 packet unit tests, 10 router unit tests, 26 integration tests)
-
-### In Progress 🔄
-- Protocol compliance enhancements (error codes, client ID validation)
+- **Comprehensive test suite** with 74 tests (36 unit tests, 29 integration tests, 9 packet tests)
 
 ### Upcoming Features 📋
-- QoS=1 and QoS=2 support
-- Persistent storage backends
-- Authentication and authorization
-- TLS/SSL and WebSocket transports
-- Production-ready features (metrics, monitoring, clustering)
+- **Milestone 2**: QoS=1 support with message acknowledgments
+- **Milestone 3**: QoS=2 support and persistent storage backends
+- **Milestone 4**: Authentication and authorization
+- **Milestone 5**: TLS/SSL and WebSocket transports
+- **Milestone 6**: Pluggable architecture
+- **Milestone 7**: Production-ready features (metrics, monitoring, clustering)
 
 For a detailed development roadmap, see [docs/roadmap.md](docs/roadmap.md).
+
+## Platform Support
+
+IoTD has been manually tested and verified to work on the following platforms:
+
+### Tested Platforms ✅
+- **macOS (Apple Silicon)** - Native ARM64 support
+- **Linux GNU (aarch64)** - ARM64 with glibc
+- **Linux musl (aarch64)** - ARM64 with musl libc (Alpine Linux)
+- **Linux GNU (x86_64)** - Intel/AMD 64-bit with glibc
+- **Linux musl (x86_64)** - Intel/AMD 64-bit with musl libc (Alpine Linux)
+
+The single binary design and Rust's cross-platform capabilities ensure consistent behavior across all supported platforms.
 
 ## Architecture
 

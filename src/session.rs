@@ -305,9 +305,48 @@ impl Session {
         info!("CONNECT received: client_id={}, clean_session={}, will_flag={}", 
               connect.client_id, connect.clean_session, connect.will_flag);
 
-        // Check for empty client ID with clean_session=false
-        if connect.client_id.is_empty() && !connect.clean_session {
-            // Protocol violation - reject connection
+        // Validate protocol name and version
+        if connect.protocol_name != v3::PROTOCOL_NAME || connect.protocol_level != v3::PROTOCOL_LEVEL {
+            info!("Invalid protocol: name={}, level={}", connect.protocol_name, connect.protocol_level);
+            let connack = packet::ConnAckPacket {
+                session_present: false,
+                return_code: v3::connect_return_codes::UNACCEPTABLE_PROTOCOL_VERSION,
+            };
+            let mut buf = bytes::BytesMut::new();
+            packet::Packet::ConnAck(connack).encode(&mut buf);
+            stream.write_all(&buf).await?;
+            return Ok(State::Cleanup);
+        }
+
+        // Validate client ID
+        if !connect.client_id.is_empty() {
+            // Check length (23 UTF-8 bytes max)
+            if connect.client_id.len() > 23 {
+                info!("Client ID too long: {} bytes", connect.client_id.len());
+                let connack = packet::ConnAckPacket {
+                    session_present: false,
+                    return_code: v3::connect_return_codes::IDENTIFIER_REJECTED,
+                };
+                let mut buf = bytes::BytesMut::new();
+                packet::Packet::ConnAck(connack).encode(&mut buf);
+                stream.write_all(&buf).await?;
+                return Ok(State::Cleanup);
+            }
+
+            // Check character set (0-9, a-z, A-Z)
+            if !connect.client_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+                info!("Client ID contains invalid characters: {}", connect.client_id);
+                let connack = packet::ConnAckPacket {
+                    session_present: false,
+                    return_code: v3::connect_return_codes::IDENTIFIER_REJECTED,
+                };
+                let mut buf = bytes::BytesMut::new();
+                packet::Packet::ConnAck(connack).encode(&mut buf);
+                stream.write_all(&buf).await?;
+                return Ok(State::Cleanup);
+            }
+        } else if !connect.clean_session {
+            // Empty client ID with clean_session=false is not allowed
             let connack = packet::ConnAckPacket {
                 session_present: false,
                 return_code: v3::connect_return_codes::IDENTIFIER_REJECTED,
@@ -315,7 +354,7 @@ impl Session {
             let mut buf = bytes::BytesMut::new();
             packet::Packet::ConnAck(connack).encode(&mut buf);
             stream.write_all(&buf).await?;
-            return Ok(State::Cleanup); // Close connection
+            return Ok(State::Cleanup);
         }
 
         // Update session parameters
