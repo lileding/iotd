@@ -1,16 +1,14 @@
 use crate::protocol::packet::QoS;
 use crate::protocol::v3::subscribe_return_codes::MAXIMUM_QOS_0;
-use crate::protocol::PublishPacket;
+use crate::protocol::{Packet, PublishPacket};
+use crate::session::Mailbox;
 use std::collections::{HashSet, HashMap};
 use tokio::sync::RwLock;
-use tokio::sync::mpsc;
-use std::sync::Arc;
-use anyhow::Result;
 use tracing::info;
 
 struct RouterInternal {
     // FILTER -> (SESSION_ID -> SENDER)
-    filters: HashMap<String, HashMap<String, Arc<mpsc::Sender<PublishPacket>>>>,
+    filters: HashMap<String, HashMap<String, Mailbox>>,
     // SESSION_ID -> FILTER
     sessions: HashMap<String, HashSet<String>>,
 }
@@ -29,7 +27,7 @@ impl Router {
         }
     }
 
-    pub async fn subscribe(&self, session_id: &str, sender: Arc<mpsc::Sender<PublishPacket>>, topic_filters: &Vec<(String, QoS)>) -> Result<Vec<u8>> {
+    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &Vec<(String, QoS)>) -> Vec<u8> {
         info!("Session {} subscribing to {} topics", session_id, topic_filters.len());
 
         let mut return_codes = Vec::new();
@@ -38,7 +36,7 @@ impl Router {
         for filter in topic_filters.iter() {
             // Store filters -> (session_id -> sender)
             router.filters.entry(filter.0.to_string()).or_insert(HashMap::new())
-                .insert(session_id.to_owned(), Arc::clone(&sender));
+                .insert(session_id.to_owned(), sender.clone());
             // Store session_id -> filter
             router.sessions.entry(session_id.to_owned()).or_insert(HashSet::new())
                 .insert(filter.0.to_owned());
@@ -46,10 +44,10 @@ impl Router {
             info!("SUBSCRIBE session_id: {}, filter: {}", session_id, filter.0);
         }
 
-        Ok(return_codes)
+        return_codes
     }
 
-    pub async fn unsubscribe(&self, topic_filters: &Vec<String>, session_id: &str) -> Result<()> {
+    pub async fn unsubscribe(&self, session_id: &str, topic_filters: &Vec<String>) {
         info!("Session {} unsubscribing to {} topics", session_id, topic_filters.len());
         let mut router = self.data.write().await;
 
@@ -61,8 +59,6 @@ impl Router {
                 record.remove(filter);
             }
         }
-
-        Ok(())
     }
 
     pub async fn unsubscribe_all(&self, session_id: &str) {
@@ -77,7 +73,7 @@ impl Router {
         }
     }
 
-    pub async fn route(&self, topic: &str, payload: &[u8]) -> Result<()> {
+    pub async fn route(&self, topic: &str, payload: &[u8]) {
         let router = self.data.read().await;
 
         let packet = PublishPacket {
@@ -93,12 +89,12 @@ impl Router {
             if Self::topic_matches(topic, filter) {
                 for (session_id, sender) in sessions.iter() {
                     info!("ROUTE topic:{} session_id:{}", topic, session_id);
-                    sender.send(packet.clone()).await.unwrap();
+                    sender.send(Packet::Publish(packet.clone())).await.unwrap_or_else(|e| {
+                        info!("Route topic {} to session {} error: {}", topic, session_id, e);
+                    });
                 }
             }
         }
-
-        Ok(())
     }
 
     // Simple topic matching - supports + (single level) and # (multi level) wildcards

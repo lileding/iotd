@@ -1,24 +1,17 @@
-use crate::session::Session;
+use crate::protocol::packet::QoS;
+use crate::session::{Session, Mailbox};
 use crate::router::Router;
-use crate::protocol::{packet, PublishPacket};
-use anyhow::Result;
-use dashmap::DashMap;
+use crate::transport::AsyncStream;
+use dashmap::{DashMap, mapref::entry::Entry};
 use std::sync::Arc;
-use std::error::Error;
-use std::sync::atomic::Ordering;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::{Mutex, mpsc};
-use tokio::task::JoinHandle;
+use tokio::sync::Mutex;
 use std::collections::HashMap;
-use tokio_util::sync::CancellationToken;
 use tracing::{info, error};
 
 pub struct Broker {
-    sessions: Mutex<HashMap<String, JoinHandle<()>>>,
-    named_clients: DashMap<String, (String, CancellationToken)>,
-    #[allow(dead_code)]
+    sessions: Mutex<HashMap<String, Arc<Session>>>,
+    named_clients: DashMap<String, String>,
     router: Router,
-    shutdown: Mutex<CancellationToken>,
 }
 
 impl Broker {
@@ -27,246 +20,90 @@ impl Broker {
             sessions: Mutex::new(HashMap::new()),
             named_clients: DashMap::new(),
             router: Router::new(),
-            shutdown: Mutex::new(CancellationToken::new()),
         })
     }
 
-    pub async fn add_session(self: &Arc<Self>, session: Session) {
+    pub async fn add_client(self: &Arc<Self>, stream: Box<dyn AsyncStream>) {
+        // Lock the sessions
         let mut sessions = self.sessions.lock().await;
 
-        let session_id = session.session_id.clone();
-        info!("Added session {} to broker", session_id);
-        
-        // Spawn a thread to handle client packets
-        let broker_run = Arc::clone(self);
-        let shutdown = self.shutdown.lock().await.child_token();
-        let handle = tokio::spawn(async move {
-            Broker::process_session(broker_run, session, shutdown).await;
-        });
-        
-        sessions.insert(session_id, handle);
+        let session = Session::spawn(
+            Arc::clone(self),
+            stream,
+        ).await;
+
+        info!("Added session {} to broker", session.id());
+        sessions.insert(session.id().to_owned(), session);
     }
 
     pub async fn clean_all_sessions(&self) {
-        // Lock the sessions to avoid another add_session call
+        // Lock the sessions 
         let mut sessions = self.sessions.lock().await;
-        
-        let mut shutdown = self.shutdown.lock().await;
-        let old_shutdown = shutdown.clone();
-        *shutdown = CancellationToken::new();
-        old_shutdown.cancel();
-        
-        let old_sessions: Vec<(String, JoinHandle<()>)> = sessions.drain().collect();
-        self.named_clients.clear();
-        drop(sessions);
 
-        for (session_id, handle) in old_sessions {
-            if let Err(e) = handle.await {
-                error!("Error waiting for session {} to complete: {}", session_id, e);
-            }
+        self.named_clients.clear();
+        let old_sessions: Vec<(String, Arc<Session>)> = sessions.drain().collect();
+
+        drop(sessions);
+        // Unlock the sessions
+
+        info!("Begin clear sessions");
+
+        let mut handles = Vec::new();
+        handles.reserve(old_sessions.len());
+        for (_, session) in old_sessions {
+            session.cancel().await.map(|h| handles.push(h));
+        }
+        for handle in handles {
+            handle.await.unwrap_or_else(|e| {
+                error!("Error in join task: {}", e);
+            });
         }
 
         info!("All sessions cleaned");
     }
 
-    pub async fn process_session(self: Arc<Self>, mut session: Session, shutdown: CancellationToken) {
-        info!("Starting session processing for session {}", session.session_id);
-        
-        // Create message channel for routing
-        let (message_tx, mut message_rx) = mpsc::channel::<PublishPacket>(1000);
-        let message_sender = Arc::new(message_tx);
-        
-        loop {
-            tokio::select! {
-                result = self.process_packet(&mut session, shutdown.clone(), message_sender.clone()) => {
-                    match result {
-                        Ok(true) => {
-                            // Continue processing packets
-                        },
-                        Ok(false) => {
-                            info!("Session {} ended normally", session.session_id);
-                            break;
-                        },
-                        Err(e) => {
-                            error!("Error processing packet for session {}: {}", session.session_id, e);
-                            break;
-                        },
-                    }
+    pub async fn resolve_collision(&self, client_id: &str, session_id: &str) -> Option<Arc<Session>> {
+        match self.named_clients.entry(client_id.to_owned()) {
+            Entry::Occupied(entry) => {
+                match self.sessions.lock().await.get(&entry.get().clone()) {
+                    Some(session) => Some(Arc::clone(session)),
+                    None => None
                 }
-
-                // Handle messages from router to send to client
-                message = message_rx.recv() => {
-                    match message {
-                        Some(publish_packet) => {
-                            let mut buf = bytes::BytesMut::new();
-                            packet::Packet::Publish(publish_packet).encode(&mut buf);
-                            if let Err(e) = session.stream.write_all(&buf).await {
-                                error!("Failed to send message to session {}: {}", session.session_id, e);
-                                break;
-                            }
-                            info!("Sent routed message to session {}", session.session_id);
-                        }
-                        None => {
-                            info!("Message channel closed for session {}", session.session_id);
-                            break;
-                        }
-                    }
-                }
-
-                _ = shutdown.cancelled() => {
-                    info!("Session {} shutting down due to broker shutdown", session.session_id);
-                    
-                    // Send DISCONNECT message if session is connected
-                    if session.connected.load(Ordering::Relaxed) {
-                        let disconnect = packet::Packet::Disconnect;
-                        let mut buf = bytes::BytesMut::new();
-                        disconnect.encode(&mut buf);
-                        if let Err(e) = session.stream.write_all(&buf).await {
-                            error!("Failed to send disconnect message for session {}: {}", session.session_id, e);
-                        }
-                    }
-                    
-                    break;
-                },
             }
-        }
-        
-        // Clean up subscriptions for this session
-        self.router.unsubscribe_all(&session.session_id).await;
-        info!("Session {} unsubscribed completed", session.session_id);
-        
-        // Remove session from sessions map
-        self.sessions.lock().await.remove(&session.session_id);
-        
-        info!("Session {} processing completed", session.session_id);
-    }
-
-    async fn process_packet(self: &Arc<Self>, session: &mut Session, shutdown: CancellationToken, message_sender: Arc<mpsc::Sender<PublishPacket>>) -> Result<bool> {
-        // Read and parse MQTT packet from stream
-        match packet::Packet::decode(&mut session.stream).await {
-            Ok(packet) => {
-                // Handle different packet types
-                return match packet {
-                    packet::Packet::Connect(p) => self.on_connect(session, p, shutdown).await,
-                    packet::Packet::Publish(p) => self.on_publish(session, p).await,
-                    packet::Packet::Subscribe(p) => self.on_subscribe(session, p, message_sender).await,
-                    packet::Packet::Unsubscribe(p) => self.on_unsubscribe(session, p).await,
-                    packet::Packet::PingReq => self.on_pingreq(session).await,
-                    packet::Packet::Disconnect => self.on_disconnect(session).await,
-                    _ => {
-                        let session_id = &session.session_id;
-                        error!("Unhandled packet type for session {}", session_id);
-                        Ok(false)
-                    }
-                }
-            },
-            Err(e) => {
-                // Check if this is a connection closed error
-                if let Some(io_error) = e.source().and_then(|e| e.downcast_ref::<std::io::Error>()) {
-                    if io_error.kind() == std::io::ErrorKind::UnexpectedEof {
-                        let session_id = &session.session_id;
-                        info!("Client {} closed connection", session_id);
-                        return Ok(false);
-                    }
-                }
-                let session_id = &session.session_id;
-                error!("Packet decoding error for session {}: {}", session_id, e);
-                Err(e.into())
+            Entry::Vacant(entry) => {
+                entry.insert(session_id.to_owned());
+                None
             }
         }
     }
 
-    async fn on_connect(self: &Arc<Self>, session: &mut Session, packet: packet::ConnectPacket, shutdown: CancellationToken) -> Result<bool> {
-        info!("CONNECT received: client_id={}, clean_session={}", packet.client_id, packet.clean_session);
+    pub async fn remove_session(&self, session: &Session) {
+        // Lock the sessions
+        let mut sessions = self.sessions.lock().await;
 
-        // Set connected flag to true before sending CONNACK
-        session.connected.store(true, Ordering::Relaxed);
-
-        // Send CONNACK response
-        let connack = packet::ConnAckPacket {
-            session_present: false,
-            return_code: crate::protocol::v3::connect_return_codes::ACCEPTED,
-        };
-        let mut buf = bytes::BytesMut::new();
-        packet::Packet::ConnAck(connack).encode(&mut buf);
-        session.stream.write_all(&buf).await?;
-
-        // Update client ID if provided and handle name collision after CONNACK
-        if !packet.client_id.is_empty() {
-            session.client_id = Some(packet.client_id.clone());
-            // Remove name collisioned session
-            if let Some((old_session_id, cancel)) = self.named_clients.insert(packet.client_id.clone(), (session.session_id.clone(), shutdown)) {
-                info!("Client {} already connected on session {}, cancelling old session", packet.client_id, old_session_id);
-                cancel.cancel();
-                if let Some(handle) = self.sessions.lock().await.remove(&old_session_id) {
-                    if let Err(e) = handle.await {
-                        error!("Error waiting for session {} to complete: {}", old_session_id, e);
-                    }
-                }
-            }
+        self.router.unsubscribe_all(session.id()).await;
+        if let Some(ref client_id) = session.client_id().await {
+            self.named_clients.remove(client_id);
         }
+        sessions.remove(session.id());
 
-        Ok(true)
+        info!("Removed session {} from broker", session.id());
     }
 
-    async fn on_publish(self: &Arc<Self>, session: &mut Session, packet: packet::PublishPacket) -> Result<bool> {
-        let session_id = &session.session_id;
-        info!("PUBLISH received for session {}: topic={}, qos={:?}", session_id, packet.topic, packet.qos);
-        
-        // Route the message through the router
-        self.router.route(&packet.topic, &packet.payload).await?;
-               
-        Ok(true)
+    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &Vec<(String, QoS)>) -> Vec<u8> {
+        self.router.subscribe(session_id, sender, topic_filters).await
     }
 
-    async fn on_subscribe(self: &Arc<Self>, session: &mut Session, packet: packet::SubscribePacket, message_sender: Arc<mpsc::Sender<PublishPacket>>) -> Result<bool> {
-        let session_id = &session.session_id;
-        info!("SUBSCRIBE received for session {}: topics={:?}", session_id, packet.topic_filters);
-        
-        // Handle subscription logic through router
-        let return_codes = self.router.subscribe(session_id, message_sender, &packet.topic_filters).await?;
-        
-        // Send SUBACK
-        let suback = packet::SubAckPacket {
-            packet_id: packet.packet_id,
-            return_codes,
-        };
-        let mut buf = bytes::BytesMut::new();
-        packet::Packet::SubAck(suback).encode(&mut buf);
-        session.stream.write_all(&buf).await?;
-        Ok(true)
+    pub async fn unsubscribe(&self, session_id: &str, topic_filters: &Vec<String>) {
+        self.router.unsubscribe(session_id, topic_filters).await
     }
 
-    async fn on_pingreq(self: &Arc<Self>, session: &mut Session) -> Result<bool> {
-        let session_id = &session.session_id;
-        info!("PINGREQ received for session {}", session_id);
-        let pingresp = packet::Packet::PingResp;
-        let mut buf = bytes::BytesMut::new();
-        pingresp.encode(&mut buf);
-        session.stream.write_all(&buf).await?;
-        Ok(true)
+    pub async fn unsubscribe_all(&self, session_id: &str) {
+        self.router.unsubscribe_all(session_id).await
     }
 
-    async fn on_unsubscribe(self: &Arc<Self>, session: &mut Session, packet: packet::UnsubscribePacket) -> Result<bool> {
-        let session_id = &session.session_id;
-        info!("UNSUBSCRIBE received for session {}: topics={:?}", session_id, packet.topic_filters);
-        
-        // Handle unsubscription logic through router
-        self.router.unsubscribe(&packet.topic_filters, session_id).await?;
-        
-        // Send UNSUBACK
-        let unsuback = packet::UnsubAckPacket {
-            packet_id: packet.packet_id,
-        };
-        let mut buf = bytes::BytesMut::new();
-        packet::Packet::UnsubAck(unsuback).encode(&mut buf);
-        session.stream.write_all(&buf).await?;
-        Ok(true)
-    }
-
-    async fn on_disconnect(self: &Arc<Self>, session: &mut Session) -> Result<bool> {
-        let session_id = &session.session_id;
-        info!("DISCONNECT received for session {}", session_id);
-        Ok(false)
+    pub async fn route(&self, topic: &str, payload: &[u8]) {
+        self.router.route(topic, payload).await
     }
 }
+

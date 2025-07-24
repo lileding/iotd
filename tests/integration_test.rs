@@ -7,7 +7,7 @@ static INIT: std::sync::Once = std::sync::Once::new();
 
 pub fn init_test_logging() {
     INIT.call_once(|| {
-        return;
+        //return;
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::INFO)
             .init();

@@ -1,14 +1,14 @@
 use crate::config::Config;
-use crate::session::Session;
 use crate::broker::Broker;
 use crate::transport::{AsyncListener, TcpAsyncListener};
-use anyhow::Result;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{RwLock, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, error};
 use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, ServerError>;
 
 #[derive(Error, Debug)]
 pub enum ServerError {
@@ -20,12 +20,10 @@ pub enum ServerError {
     NotRunning,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Other error: {0}")]
-    Other(#[from] anyhow::Error),
 }
 
 /// Static function to start a server with the given configuration
-pub async fn start(config: Config) -> Result<Server, ServerError> {
+pub async fn start(config: Config) -> Result<Server> {
     let server = Server::new(config);
     server.start().await?;
     Ok(server)
@@ -40,9 +38,6 @@ pub struct Server {
     address: RwLock<Option<String>>,
 }
 
-unsafe impl Send for Server {}
-unsafe impl Sync for Server {}
-
 impl Server {
     pub fn new(config: Config) -> Self {
         Self {
@@ -55,7 +50,7 @@ impl Server {
         }
     }
 
-    pub async fn start(&self) -> Result<(), ServerError> {
+    pub async fn start(&self) -> Result<()> {
         if self.running.load(Ordering::Acquire) {
             return Err(ServerError::AlreadyRunning);
         }
@@ -75,8 +70,8 @@ impl Server {
         info!("Server listening on {}", bound_addr);
 
         // Spawn the server task
-        let broker = Arc::clone(&self.broker);
         let shutdown_token = self.shutdown_token.clone();
+        let broker = Arc::clone(&self.broker);
         let handle = tokio::spawn(async move {
             Self::run_server(broker, listener, shutdown_token).await;
         });
@@ -89,7 +84,7 @@ impl Server {
         Ok(())
     }
 
-    pub async fn stop(&self) -> Result<(), ServerError> {
+    pub async fn stop(&self) -> Result<()> {
         if !self.running.load(Ordering::Acquire) {
             return Err(ServerError::NotRunning);
         }
@@ -101,7 +96,9 @@ impl Server {
 
         // Wait for the server task to complete
         if let Some(handle) = self.server_handle.lock().await.take() {
-            handle.await.map_err(|e| ServerError::Other(e.into()))?;
+            handle.await.unwrap_or_else(|e| {
+                error!("Error in waiting for server task {}", e);
+            });
         }
 
         // Clear all sessions
@@ -131,12 +128,9 @@ impl Server {
                     match accept_result {
                         Ok(stream) => {
                             info!("New client connected");
-                            // Create a new session
-                            let session = Session::new(stream);
                             
-                            // Add to broker
-                            broker.add_session(session).await;
-                            
+                            // Add client to broker
+                            broker.add_client(stream).await;
                         }
                         Err(e) => {
                             error!("Failed to accept connection: {}", e);
@@ -159,7 +153,5 @@ impl Server {
 
         info!("Server loop completed");
     }
-
-
 }
 

@@ -15,6 +15,7 @@ pub trait AsyncListener: Send + Sync {
 pub trait AsyncStream: AsyncRead + AsyncWrite + Send + Sync + Unpin {
     async fn close(&mut self) -> Result<()>;
     fn peer_addr(&self) -> Result<SocketAddr>;
+    fn split(&mut self) -> (Box<dyn AsyncRead + Send + Sync + Unpin + '_>, Box<dyn AsyncWrite + Send + Sync + Unpin + '_>);
 }
 
 #[derive(Debug, Clone)]
@@ -116,5 +117,10 @@ impl AsyncStream for TcpAsyncStream {
 
     fn peer_addr(&self) -> Result<SocketAddr> {
         Ok(self.stream.peer_addr()?)
+    }
+
+    fn split(&mut self) -> (Box<dyn AsyncRead + Send + Sync + Unpin + '_>, Box<dyn AsyncWrite + Send + Sync + Unpin + '_>) {
+        let (r, w) = self.stream.split();
+        (Box::new(r), Box::new(w))
     }
 }
