@@ -101,6 +101,8 @@ impl Session {
                 State::WaitTakeover => self.do_wait_takeover().await,
                 State::Cleanup => {
                     debug!("Session {} STATE CLEANUP", self.id());
+                    // TODO: Save subscriptions and unfinished messages to persistent storage
+                    // This will be implemented in Milestone 3 for persistent session support
                     break;
                 },
             }
@@ -178,7 +180,7 @@ impl Session {
                         }
                     };
                     if !success {
-                        if !self.clean_session.load(Ordering::SeqCst) {
+                        if !self.clean_session.load(Ordering::Acquire) {
                             next_state = State::WaitTakeover;
                         }
                         break;
@@ -190,7 +192,7 @@ impl Session {
                     message.encode(&mut buf);
                     if let Err(e) = writer.write_all(&buf).await {
                         info!("Session {} error: {}", self.id(), e);
-                        if !self.clean_session.load(Ordering::SeqCst) {
+                        if !self.clean_session.load(Ordering::Acquire) {
                             next_state = State::WaitTakeover;
                         }
                         break;
@@ -271,8 +273,8 @@ impl Session {
         }
 
         // Update session parameters
-        self.clean_session.store(connect.clean_session, Ordering::SeqCst);
-        self.keep_alive.store(connect.keep_alive, Ordering::SeqCst);
+        self.clean_session.store(connect.clean_session, Ordering::Release);
+        self.keep_alive.store(connect.keep_alive, Ordering::Release);
 
         // Handle client ID and potential session takeover
         if !connect.client_id.is_empty() {
@@ -317,8 +319,8 @@ impl Session {
         packet::Packet::ConnAck(connack).encode(&mut buf);
         match stream.write_all(&buf).await {
             Ok(_) => {
-                self.clean_session.store(clean_session, Ordering::SeqCst);
-                self.keep_alive.store(keep_alive, Ordering::SeqCst);
+                self.clean_session.store(clean_session, Ordering::Release);
+                self.keep_alive.store(keep_alive, Ordering::Release);
                 if clean_session {
                     self.broker.unsubscribe_all(self.id()).await;
                 }
