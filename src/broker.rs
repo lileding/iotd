@@ -1,4 +1,4 @@
-use crate::protocol::packet::QoS;
+use crate::protocol::packet::{QoS, PublishPacket};
 use crate::session::{Session, Mailbox};
 use crate::router::Router;
 use crate::transport::AsyncStream;
@@ -15,11 +15,11 @@ pub struct Broker {
 }
 
 impl Broker {
-    pub fn new() -> Arc<Self> {
+    pub fn new(retained_message_limit: usize) -> Arc<Self> {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
             named_clients: DashMap::new(),
-            router: Router::new(),
+            router: Router::new(retained_message_limit),
         })
     }
 
@@ -90,7 +90,7 @@ impl Broker {
         info!("Removed session {} from broker", session.id());
     }
 
-    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &Vec<(String, QoS)>) -> Vec<u8> {
+    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &Vec<(String, QoS)>) -> (Vec<u8>, Vec<PublishPacket>) {
         self.router.subscribe(session_id, sender, topic_filters).await
     }
 
@@ -102,8 +102,8 @@ impl Broker {
         self.router.unsubscribe_all(session_id).await
     }
 
-    pub async fn route(&self, topic: &str, payload: &[u8]) {
-        self.router.route(topic, payload).await
+    pub async fn route(&self, packet: PublishPacket) {
+        self.router.route(packet).await
     }
 }
 

@@ -583,3 +583,283 @@ async fn read_connack_with_session_present(stream: &mut TcpStream) -> bool {
     assert_eq!(response[3], 0x00); // Return code = accepted
     response[2] & 0x01 == 0x01 // Session present flag
 }
+
+#[tokio::test]
+async fn test_retained_message_basic() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Publisher sends retained message
+    let mut publisher = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut publisher, "pub").await;
+    read_connack(&mut publisher).await;
+
+    // Publish with retain=true
+    let mut publish_packet = vec![
+        0x31, // PUBLISH packet type with retain flag
+        0x0C, // Remaining length = 12
+        0x00, 0x05, // Topic length = 5
+    ];
+    publish_packet.extend_from_slice(b"test/"); // Topic "test/"
+    publish_packet.extend_from_slice(b"hello"); // Payload "hello"
+    publisher.write_all(&publish_packet).await.unwrap();
+
+    // Small delay to ensure message is stored
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // New subscriber connects
+    let mut subscriber = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut subscriber, "sub").await;
+    read_connack(&mut subscriber).await;
+
+    // Subscribe to topic
+    let subscribe_packet = [
+        0x82, // SUBSCRIBE packet type with flags
+        0x0A, // Remaining length
+        0x00, 0x01, // Packet ID = 1
+        0x00, 0x05, // Topic filter length = 5
+        b't', b'e', b's', b't', b'/', // Topic filter "test/"
+        0x00, // QoS = 0
+    ];
+    subscriber.write_all(&subscribe_packet).await.unwrap();
+
+    // Read SUBACK (should always come first now)
+    let mut suback = [0u8; 5];
+    subscriber.read_exact(&mut suback).await.unwrap();
+    assert_eq!(suback[0], 0x90); // SUBACK
+    assert_eq!(suback[1], 0x03); // Remaining length
+    assert_eq!(suback[2], 0x00); // Packet ID MSB
+    assert_eq!(suback[3], 0x01); // Packet ID LSB
+    assert_eq!(suback[4], 0x00); // Return code (success)
+    
+    // Now read retained message
+    let mut header = [0u8; 2];
+    subscriber.read_exact(&mut header).await.unwrap();
+    assert_eq!(header[0], 0x31); // PUBLISH with retain flag
+    let mut payload = vec![0u8; header[1] as usize];
+    subscriber.read_exact(&mut payload).await.unwrap();
+    assert_eq!(payload[7..], *b"hello"); // Retained message received
+
+    let _ = server.stop().await;
+}
+
+#[tokio::test]
+async fn test_retained_message_update() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Publisher sends first retained message
+    let mut publisher = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut publisher, "pub").await;
+    read_connack(&mut publisher).await;
+
+    // Publish first retained message
+    let mut publish1 = vec![
+        0x31, // PUBLISH with retain
+        0x0E, // Remaining length = 14
+        0x00, 0x05, // Topic length = 5
+    ];
+    publish1.extend_from_slice(b"test/");
+    publish1.extend_from_slice(b"first!!");
+    publisher.write_all(&publish1).await.unwrap();
+    publisher.flush().await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Update retained message
+    let mut publish2 = vec![
+        0x31, // PUBLISH with retain
+        0x0E, // Remaining length = 14 (2 + 5 + 7)
+        0x00, 0x05, // Topic length = 5
+    ];
+    publish2.extend_from_slice(b"test/");
+    publish2.extend_from_slice(b"updated");
+    publisher.write_all(&publish2).await.unwrap();
+    publisher.flush().await.unwrap(); // Ensure data is sent
+
+    tokio::time::sleep(Duration::from_millis(100)).await; // Give more time
+
+    // New subscriber should get updated message
+    let mut subscriber = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut subscriber, "sub").await;
+    read_connack(&mut subscriber).await;
+
+    // Subscribe
+    let subscribe_packet = [
+        0x82, // SUBSCRIBE
+        0x0A, // Remaining length
+        0x00, 0x01, // Packet ID = 1
+        0x00, 0x05, // Topic filter length = 5
+        b't', b'e', b's', b't', b'/', // Topic filter
+        0x00, // QoS = 0
+    ];
+    subscriber.write_all(&subscribe_packet).await.unwrap();
+
+    // Read SUBACK (should always come first now)
+    let mut suback = [0u8; 5];
+    subscriber.read_exact(&mut suback).await.unwrap();
+    assert_eq!(suback[0], 0x90); // SUBACK
+    assert_eq!(suback[1], 0x03); // Remaining length
+    assert_eq!(suback[2], 0x00); // Packet ID MSB
+    assert_eq!(suback[3], 0x01); // Packet ID LSB
+    assert_eq!(suback[4], 0x00); // Return code (success)
+    
+    // Now read retained message
+    let mut header = [0u8; 2];
+    subscriber.read_exact(&mut header).await.unwrap();
+    assert_eq!(header[0], 0x31); // PUBLISH with retain
+    let mut payload = vec![0u8; header[1] as usize];
+    subscriber.read_exact(&mut payload).await.unwrap();
+    assert_eq!(payload[7..], *b"updated"); // Updated message
+
+    let _ = server.stop().await;
+}
+
+#[tokio::test]
+async fn test_retained_message_delete() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    let mut publisher = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut publisher, "pub").await;
+    read_connack(&mut publisher).await;
+
+    // Publish retained message
+    let mut publish = vec![
+        0x31, // PUBLISH with retain
+        0x0C, // Remaining length = 12
+        0x00, 0x05, // Topic length = 5
+    ];
+    publish.extend_from_slice(b"test/");
+    publish.extend_from_slice(b"hello");
+    publisher.write_all(&publish).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Delete retained message (empty payload with retain=true)
+    let delete = vec![
+        0x31, // PUBLISH with retain
+        0x07, // Remaining length = 7 (no payload)
+        0x00, 0x05, // Topic length = 5
+        b't', b'e', b's', b't', b'/', // Topic
+        // No payload
+    ];
+    publisher.write_all(&delete).await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // New subscriber should NOT receive any retained message
+    let mut subscriber = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut subscriber, "sub").await;
+    read_connack(&mut subscriber).await;
+
+    // Subscribe
+    let subscribe_packet = [
+        0x82, // SUBSCRIBE
+        0x0A, // Remaining length
+        0x00, 0x01, // Packet ID = 1
+        0x00, 0x05, // Topic filter length = 5
+        b't', b'e', b's', b't', b'/', // Topic filter
+        0x00, // QoS = 0
+    ];
+    subscriber.write_all(&subscribe_packet).await.unwrap();
+
+    // Read SUBACK
+    let mut suback = [0u8; 5];
+    subscriber.read_exact(&mut suback).await.unwrap();
+
+    // Should NOT receive any retained message
+    let mut header = [0u8; 2];
+    match timeout(Duration::from_millis(500), subscriber.read_exact(&mut header)).await {
+        Ok(_) => panic!("Should not receive retained message after deletion"),
+        Err(_) => {} // Expected timeout
+    }
+
+    let _ = server.stop().await;
+}
+
+#[tokio::test]
+async fn test_retained_message_wildcard() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    let mut publisher = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut publisher, "pub").await;
+    read_connack(&mut publisher).await;
+
+    // Publish multiple retained messages
+    let topics = [
+        ("home/room1/temp", "20C"),
+        ("home/room2/temp", "22C"),
+        ("home/room1/humidity", "60%"),
+    ];
+
+    for (topic, payload) in &topics {
+        let mut publish = vec![
+            0x31, // PUBLISH with retain
+            (2 + topic.len() + payload.len()) as u8, // Remaining length
+            (topic.len() >> 8) as u8, // Topic length high byte
+            (topic.len() & 0xFF) as u8, // Topic length low byte
+        ];
+        publish.extend_from_slice(topic.as_bytes());
+        publish.extend_from_slice(payload.as_bytes());
+        publisher.write_all(&publish).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Subscribe with wildcard
+    let mut subscriber = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut subscriber, "sub").await;
+    read_connack(&mut subscriber).await;
+
+    // Subscribe to "home/+/temp"
+    let subscribe_packet = vec![
+        0x82, // SUBSCRIBE
+        0x10, // Remaining length = 16
+        0x00, 0x01, // Packet ID = 1
+        0x00, 0x0B, // Topic filter length = 11
+        b'h', b'o', b'm', b'e', b'/', b'+', b'/', b't', b'e', b'm', b'p', // "home/+/temp" (11 chars)
+        0x00, // QoS = 0
+    ];
+    subscriber.write_all(&subscribe_packet).await.unwrap();
+
+    // Read SUBACK first
+    let mut suback = [0u8; 5];
+    subscriber.read_exact(&mut suback).await.unwrap();
+    assert_eq!(suback[0], 0x90); // SUBACK
+    assert_eq!(suback[1], 0x03); // Remaining length
+    assert_eq!(suback[2], 0x00); // Packet ID MSB
+    assert_eq!(suback[3], 0x01); // Packet ID LSB
+    assert_eq!(suback[4], 0x00); // Return code (success)
+    
+    // Now read 2 retained messages
+    let mut retained_count = 0;
+    for _ in 0..2 {
+        let mut header = [0u8; 2];
+        match timeout(Duration::from_secs(1), subscriber.read_exact(&mut header)).await {
+            Ok(Ok(_)) => {
+                assert_eq!(header[0], 0x31); // PUBLISH with retain
+                let mut payload = vec![0u8; header[1] as usize];
+                subscriber.read_exact(&mut payload).await.unwrap();
+                retained_count += 1;
+            }
+            _ => break,
+        }
+    }
+    
+    assert_eq!(retained_count, 2, "Should receive 2 retained messages for wildcard subscription");
+
+    let _ = server.stop().await;
+}

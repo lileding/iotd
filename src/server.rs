@@ -40,9 +40,10 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: Config) -> Self {
+        let retained_message_limit = config.server.retained_message_limit;
         Self {
             config,
-            broker: Broker::new(),
+            broker: Broker::new(retained_message_limit),
             shutdown_token: CancellationToken::new(),
             running: AtomicBool::new(false),
             server_handle: Mutex::new(None),

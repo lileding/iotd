@@ -24,10 +24,10 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 - ✅ **Message routing system** with topic filtering and MQTT wildcard support (`+`, `#`)
 - ✅ **Clean session logic** with session takeover and DISCONNECT notifications
 - ✅ **Keep-alive mechanism** with configurable timeouts and ping/pong handling
-- ✅ Comprehensive test suite (40 tests: 10 router unit tests, 30 integration/packet tests)
+- ✅ **Retained messages** with update/delete support, wildcard matching, and configurable limits
+- ✅ Comprehensive test suite (44 tests: 10 router unit tests, 34 integration/packet tests)
 
 **❌ Missing Core Features:**
-- ❌ Retained messages (store and deliver to new subscribers)
 - ❌ Will messages (store on CONNECT, deliver on abnormal disconnect)
 - ❌ Protocol compliance (proper error codes, client ID validation)
 
@@ -43,7 +43,8 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 - [✓] All MQTT v3.1.1 packet types working
 - [✓] Message routing between clients functional
 - [✓] Clean session behavior implemented
-- [ ] Retained and will messages working
+- [✓] Retained messages working
+- [ ] Will messages working
 - [✓] Keep-alive timeouts handled
 - [ ] Full protocol compliance
 
@@ -218,7 +219,8 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 - QoS 0 messaging with routing
 - Clean session with takeover support ✓
 - Keep-alive mechanism ✓
-- Retained messages and will messages (in progress)
+- Retained messages with wildcard support ✓
+- Will messages (in progress)
 - Event-driven architecture ✓
 
 ### v0.2.0 - Quality of Service (Milestone 2) 📋

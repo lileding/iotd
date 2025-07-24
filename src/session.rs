@@ -375,10 +375,11 @@ impl Session {
     }
 
     async fn on_publish(&self, packet: packet::PublishPacket) -> Result<bool> {
-        info!("PUBLISH received for session {}: topic={}, qos={:?}", self.id(), packet.topic, packet.qos);
+        info!("PUBLISH received for session {}: topic={}, qos={:?}, retain={}", 
+              self.id(), packet.topic, packet.qos, packet.retain);
 
         // Route the message through the router
-        self.broker.route(&packet.topic, &packet.payload).await;
+        self.broker.route(packet).await;
 
         Ok(true)
     }
@@ -387,18 +388,23 @@ impl Session {
         info!("SUBSCRIBE received for session {}: topics={:?}", self.id(), packet.topic_filters);
 
         // Handle subscription logic through router
-        let return_codes = self.broker.subscribe(
+        let (return_codes, retained_messages) = self.broker.subscribe(
             self.id(),
             self.message_tx.clone(),
             &packet.topic_filters,
         ).await;
 
-        // Send SUBACK
+        // Send SUBACK first
         let suback = packet::SubAckPacket {
             packet_id: packet.packet_id,
             return_codes,
         };
         self.message_tx.send(packet::Packet::SubAck(suback)).await?;
+
+        // Then send any retained messages
+        for retained_msg in retained_messages {
+            self.message_tx.send(packet::Packet::Publish(retained_msg)).await?;
+        }
 
         Ok(true)
     }

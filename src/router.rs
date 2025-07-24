@@ -1,6 +1,6 @@
-use crate::protocol::packet::QoS;
+use crate::protocol::packet::{QoS, PublishPacket};
 use crate::protocol::v3::subscribe_return_codes::MAXIMUM_QOS_0;
-use crate::protocol::{Packet, PublishPacket};
+use crate::protocol::Packet;
 use crate::session::Mailbox;
 use std::collections::{HashSet, HashMap};
 use tokio::sync::RwLock;
@@ -11,40 +11,60 @@ struct RouterInternal {
     filters: HashMap<String, HashMap<String, Mailbox>>,
     // SESSION_ID -> FILTER
     sessions: HashMap<String, HashSet<String>>,
+    // TOPIC -> RETAINED MESSAGE
+    retained_messages: HashMap<String, PublishPacket>,
 }
 
 pub struct Router {
     data: RwLock<RouterInternal>,
+    retained_message_limit: usize,
 }
 
 impl Router {
-    pub fn new() -> Self {
+    pub fn new(retained_message_limit: usize) -> Self {
         Self {
             data: RwLock::new(RouterInternal {
                 filters: HashMap::new(),
                 sessions: HashMap::new(),
+                retained_messages: HashMap::new(),
             }),
+            retained_message_limit,
         }
     }
 
-    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &Vec<(String, QoS)>) -> Vec<u8> {
+    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &Vec<(String, QoS)>) -> (Vec<u8>, Vec<PublishPacket>) {
         info!("Session {} subscribing to {} topics", session_id, topic_filters.len());
 
         let mut return_codes = Vec::new();
-        let mut router = self.data.write().await;
+        let mut retained_to_send = Vec::new();
+        
+        {
+            let mut router = self.data.write().await;
 
-        for filter in topic_filters.iter() {
-            // Store filters -> (session_id -> sender)
-            router.filters.entry(filter.0.to_string()).or_insert(HashMap::new())
-                .insert(session_id.to_owned(), sender.clone());
-            // Store session_id -> filter
-            router.sessions.entry(session_id.to_owned()).or_insert(HashSet::new())
-                .insert(filter.0.to_owned());
-            return_codes.push(MAXIMUM_QOS_0);
-            info!("SUBSCRIBE session_id: {}, filter: {}", session_id, filter.0);
+            for filter in topic_filters.iter() {
+                // Store filters -> (session_id -> sender)
+                router.filters.entry(filter.0.to_string()).or_insert(HashMap::new())
+                    .insert(session_id.to_owned(), sender.clone());
+                // Store session_id -> filter
+                router.sessions.entry(session_id.to_owned()).or_insert(HashSet::new())
+                    .insert(filter.0.to_owned());
+                return_codes.push(MAXIMUM_QOS_0);
+                info!("SUBSCRIBE session_id: {}, filter: {}", session_id, filter.0);
+                
+                // Find retained messages matching this subscription
+                for (topic, retained_packet) in router.retained_messages.iter() {
+                    if Self::topic_matches(topic, &filter.0) {
+                        let mut packet = retained_packet.clone();
+                        // Retained messages should be sent with retain flag set to true
+                        packet.retain = true;
+                        retained_to_send.push(packet);
+                        info!("Found retained message for topic {} matching filter {}", topic, filter.0);
+                    }
+                }
+            }
         }
 
-        return_codes
+        (return_codes, retained_to_send)
     }
 
     pub async fn unsubscribe(&self, session_id: &str, topic_filters: &Vec<String>) {
@@ -73,24 +93,52 @@ impl Router {
         }
     }
 
-    pub async fn route(&self, topic: &str, payload: &[u8]) {
-        let router = self.data.read().await;
+    pub async fn route(&self, packet: PublishPacket) {
+        // Handle retained message storage
+        if packet.retain {
+            let mut router = self.data.write().await;
+            
+            if packet.payload.is_empty() {
+                // Empty payload with retain=true means delete the retained message
+                router.retained_messages.remove(&packet.topic);
+                info!("Deleted retained message for topic: {}", packet.topic);
+            } else {
+                // Check if we're at the limit and this is a new topic
+                if !router.retained_messages.contains_key(&packet.topic) 
+                    && router.retained_messages.len() >= self.retained_message_limit {
+                    info!("Retained message limit reached ({}/{}), dropping message for topic: {}", 
+                          router.retained_messages.len(), self.retained_message_limit, packet.topic);
+                } else {
+                    // Store the retained message
+                    router.retained_messages.insert(packet.topic.clone(), packet.clone());
+                    info!("Stored retained message for topic: {} (total: {}/{})", 
+                          packet.topic, router.retained_messages.len(), self.retained_message_limit);
+                }
+            }
+            
+            // Continue to route to current subscribers
+            drop(router);
+        }
 
-        let packet = PublishPacket {
-            topic: topic.to_string(),
-            packet_id: None,
-            payload: payload.to_vec().into(),
-            qos: QoS::AtMostOnce,
-            retain: false,
-            dup: false,
+        // Route to current subscribers
+        let router = self.data.read().await;
+        
+        // Create a packet for forwarding (retain flag should be false when forwarding)
+        let forward_packet = PublishPacket {
+            topic: packet.topic.clone(),
+            packet_id: packet.packet_id,
+            payload: packet.payload.clone(),
+            qos: packet.qos,
+            retain: false,  // Always false when forwarding to existing subscribers
+            dup: packet.dup,
         };
 
         for (filter, sessions) in router.filters.iter() {
-            if Self::topic_matches(topic, filter) {
+            if Self::topic_matches(&packet.topic, filter) {
                 for (session_id, sender) in sessions.iter() {
-                    info!("ROUTE topic:{} session_id:{}", topic, session_id);
-                    sender.send(Packet::Publish(packet.clone())).await.unwrap_or_else(|e| {
-                        info!("Route topic {} to session {} error: {}", topic, session_id, e);
+                    info!("ROUTE topic:{} session_id:{}", packet.topic, session_id);
+                    sender.send(Packet::Publish(forward_packet.clone())).await.unwrap_or_else(|e| {
+                        info!("Route topic {} to session {} error: {}", packet.topic, session_id, e);
                     });
                 }
             }
