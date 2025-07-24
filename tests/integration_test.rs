@@ -863,3 +863,246 @@ async fn test_retained_message_wildcard() {
 
     let _ = server.stop().await;
 }
+
+#[tokio::test]
+async fn test_will_message_on_disconnect() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Publisher with Will message
+    let mut publisher = TcpStream::connect(&address).await.unwrap();
+    
+    // Send CONNECT with Will
+    let mut connect_packet = vec![
+        0x10, // CONNECT packet type
+        0x00, // Remaining length placeholder - will update
+    ];
+    
+    // Variable header
+    connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
+    connect_packet.extend_from_slice(b"MQTT"); // Protocol name
+    connect_packet.push(0x04); // Protocol level (MQTT 3.1.1)
+    connect_packet.push(0x0E); // Connect flags: Will flag=1, Will QoS=0, Will retain=1, Clean session=1
+    connect_packet.extend_from_slice(&[0x00, 0x0A]); // Keep-alive = 10 seconds
+    
+    // Payload
+    connect_packet.extend_from_slice(&[0x00, 0x03]); // Client ID length
+    connect_packet.extend_from_slice(b"pub"); // Client ID
+    connect_packet.extend_from_slice(&[0x00, 0x0A]); // Will topic length
+    connect_packet.extend_from_slice(b"will/topic"); // Will topic
+    connect_packet.extend_from_slice(&[0x00, 0x07]); // Will message length
+    connect_packet.extend_from_slice(b"offline"); // Will message
+    
+    // Update remaining length
+    let remaining_len = connect_packet.len() - 2;
+    connect_packet[1] = remaining_len as u8;
+    
+    publisher.write_all(&connect_packet).await.unwrap();
+    read_connack(&mut publisher).await;
+
+    // Subscriber to receive Will message
+    let mut subscriber = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut subscriber, "sub").await;
+    read_connack(&mut subscriber).await;
+    
+    // Subscribe to Will topic
+    let subscribe_packet = [
+        0x82, // SUBSCRIBE packet type
+        0x0F, // Remaining length
+        0x00, 0x01, // Packet ID = 1
+        0x00, 0x0A, // Topic filter length
+        b'w', b'i', b'l', b'l', b'/', b't', b'o', b'p', b'i', b'c', // "will/topic"
+        0x00, // QoS = 0
+    ];
+    subscriber.write_all(&subscribe_packet).await.unwrap();
+    
+    // Read SUBACK
+    let mut suback = [0u8; 5];
+    subscriber.read_exact(&mut suback).await.unwrap();
+    assert_eq!(suback[0], 0x90); // SUBACK
+
+    // Abruptly close publisher connection (no DISCONNECT)
+    drop(publisher);
+    
+    // Small delay to allow Will message to be published
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Subscriber should receive Will message
+    let mut header = [0u8; 2];
+    subscriber.read_exact(&mut header).await.unwrap();
+    // Will message with retain=true should be delivered as retain=false to current subscribers
+    assert_eq!(header[0], 0x30); // PUBLISH without retain flag
+    
+    let mut payload = vec![0u8; header[1] as usize];
+    subscriber.read_exact(&mut payload).await.unwrap();
+    
+    // Verify it's the Will message
+    let topic_len = ((payload[0] as usize) << 8) | (payload[1] as usize);
+    let topic = std::str::from_utf8(&payload[2..2+topic_len]).unwrap();
+    assert_eq!(topic, "will/topic");
+    
+    let message = &payload[2+topic_len..];
+    assert_eq!(message, b"offline");
+
+    let _ = server.stop().await;
+}
+
+#[tokio::test]
+async fn test_will_message_not_sent_on_disconnect() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Publisher with Will message
+    let mut publisher = TcpStream::connect(&address).await.unwrap();
+    
+    // Send CONNECT with Will
+    let mut connect_packet = vec![
+        0x10, // CONNECT packet type
+        0x00, // Remaining length placeholder
+    ];
+    
+    // Variable header
+    connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
+    connect_packet.extend_from_slice(b"MQTT"); // Protocol name
+    connect_packet.push(0x04); // Protocol level
+    connect_packet.push(0x06); // Connect flags: Will flag=1, Clean session=1
+    connect_packet.extend_from_slice(&[0x00, 0x0A]); // Keep-alive
+    
+    // Payload
+    connect_packet.extend_from_slice(&[0x00, 0x03]); // Client ID length
+    connect_packet.extend_from_slice(b"pub"); // Client ID
+    connect_packet.extend_from_slice(&[0x00, 0x0A]); // Will topic length
+    connect_packet.extend_from_slice(b"will/topic"); // Will topic
+    connect_packet.extend_from_slice(&[0x00, 0x07]); // Will message length
+    connect_packet.extend_from_slice(b"offline"); // Will message
+    
+    // Update remaining length
+    let remaining_len = connect_packet.len() - 2;
+    connect_packet[1] = remaining_len as u8;
+    
+    publisher.write_all(&connect_packet).await.unwrap();
+    read_connack(&mut publisher).await;
+
+    // Subscriber
+    let mut subscriber = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut subscriber, "sub").await;
+    read_connack(&mut subscriber).await;
+    
+    // Subscribe to Will topic
+    let subscribe_packet = [
+        0x82, // SUBSCRIBE
+        0x0F, // Remaining length
+        0x00, 0x01, // Packet ID
+        0x00, 0x0A, // Topic filter length
+        b'w', b'i', b'l', b'l', b'/', b't', b'o', b'p', b'i', b'c',
+        0x00, // QoS
+    ];
+    subscriber.write_all(&subscribe_packet).await.unwrap();
+    
+    // Read SUBACK
+    let mut suback = [0u8; 5];
+    subscriber.read_exact(&mut suback).await.unwrap();
+
+    // Send DISCONNECT from publisher
+    let disconnect = [0xE0, 0x00]; // DISCONNECT packet
+    publisher.write_all(&disconnect).await.unwrap();
+    
+    // Small delay
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Subscriber should NOT receive Will message
+    let mut header = [0u8; 2];
+    match timeout(Duration::from_millis(500), subscriber.read_exact(&mut header)).await {
+        Ok(_) => panic!("Should not receive Will message after normal DISCONNECT"),
+        Err(_) => {} // Expected timeout
+    }
+
+    let _ = server.stop().await;
+}
+
+#[tokio::test]
+async fn test_will_message_on_keepalive_timeout() {
+    init_test_logging();
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Publisher with Will message and short keep-alive
+    let mut publisher = TcpStream::connect(&address).await.unwrap();
+    
+    // Send CONNECT with Will and 2-second keep-alive
+    let mut connect_packet = vec![
+        0x10, // CONNECT packet type
+        0x00, // Remaining length placeholder
+    ];
+    
+    // Variable header
+    connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
+    connect_packet.extend_from_slice(b"MQTT"); // Protocol name
+    connect_packet.push(0x04); // Protocol level
+    connect_packet.push(0x06); // Connect flags: Will flag=1, Clean session=1
+    connect_packet.extend_from_slice(&[0x00, 0x02]); // Keep-alive = 2 seconds
+    
+    // Payload
+    connect_packet.extend_from_slice(&[0x00, 0x03]); // Client ID length
+    connect_packet.extend_from_slice(b"pub"); // Client ID
+    connect_packet.extend_from_slice(&[0x00, 0x0C]); // Will topic length
+    connect_packet.extend_from_slice(b"will/timeout"); // Will topic
+    connect_packet.extend_from_slice(&[0x00, 0x07]); // Will message length
+    connect_packet.extend_from_slice(b"timeout"); // Will message
+    
+    // Update remaining length
+    let remaining_len = connect_packet.len() - 2;
+    connect_packet[1] = remaining_len as u8;
+    
+    publisher.write_all(&connect_packet).await.unwrap();
+    read_connack(&mut publisher).await;
+
+    // Subscriber
+    let mut subscriber = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut subscriber, "sub").await;
+    read_connack(&mut subscriber).await;
+    
+    // Subscribe to Will topic
+    let subscribe_packet = [
+        0x82, // SUBSCRIBE
+        0x11, // Remaining length
+        0x00, 0x01, // Packet ID
+        0x00, 0x0C, // Topic filter length
+        b'w', b'i', b'l', b'l', b'/', b't', b'i', b'm', b'e', b'o', b'u', b't',
+        0x00, // QoS
+    ];
+    subscriber.write_all(&subscribe_packet).await.unwrap();
+    
+    // Read SUBACK
+    let mut suback = [0u8; 5];
+    subscriber.read_exact(&mut suback).await.unwrap();
+
+    // Wait for keep-alive timeout (2s * 1.5 = 3s)
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    // Subscriber should receive Will message
+    let mut header = [0u8; 2];
+    subscriber.read_exact(&mut header).await.unwrap();
+    assert_eq!(header[0], 0x30); // PUBLISH without retain
+    
+    let mut payload = vec![0u8; header[1] as usize];
+    subscriber.read_exact(&mut payload).await.unwrap();
+    
+    // Verify it's the Will message
+    let topic_len = ((payload[0] as usize) << 8) | (payload[1] as usize);
+    let topic = std::str::from_utf8(&payload[2..2+topic_len]).unwrap();
+    assert_eq!(topic, "will/timeout");
+    
+    let message = &payload[2+topic_len..];
+    assert_eq!(message, b"timeout");
+
+    let _ = server.stop().await;
+}

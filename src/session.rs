@@ -8,6 +8,7 @@ use tokio::{io::AsyncWriteExt, sync::{mpsc, Mutex}, task::JoinHandle, time::Dura
 use tracing::{debug, info, error};
 use uuid::Uuid;
 use thiserror::Error;
+use bytes::Bytes;
 
 pub struct Session {
     id: String,
@@ -21,9 +22,18 @@ pub struct Session {
     command_rx: Mutex<mpsc::Receiver<Command>>,
     message_tx: mpsc::Sender<packet::Packet>,
     message_rx: Mutex<Option<mpsc::Receiver<packet::Packet>>>,
+    will_message: Mutex<Option<WillMessage>>,
 }
 
 pub type Mailbox = mpsc::Sender<packet::Packet>;
+
+#[derive(Debug, Clone)]
+struct WillMessage {
+    topic: String,
+    payload: Bytes,
+    qos: packet::QoS,
+    retain: bool,
+}
 
 enum Command {
     Takeover(Box<dyn AsyncStream>, bool, u16),
@@ -66,6 +76,7 @@ impl Session {
             command_rx: Mutex::new(command_rx),
             message_tx,
             message_rx: Mutex::new(Some(message_rx)),
+            will_message: Mutex::new(None),
         });
 
         let task = Arc::clone(&sess);
@@ -248,6 +259,7 @@ impl Session {
                         if !self.clean_session.load(Ordering::Acquire) {
                             next_state = State::WaitTakeover;
                         }
+                        // Keep-alive timeout is an abnormal disconnect
                         break;
                     }
                     // If keep_alive_secs == 0, this tick is ignored (infinite timeout)
@@ -256,6 +268,12 @@ impl Session {
         }
 
         self.message_rx.lock().await.replace(message_rx);
+
+        // Publish Will message if we're exiting abnormally (going to Cleanup)
+        // but NOT if we're going to WaitTakeover (persistent session)
+        if matches!(next_state, State::Cleanup) {
+            self.publish_will().await;
+        }
 
         next_state
     }
@@ -284,7 +302,8 @@ impl Session {
     }
 
     async fn on_connect(&self, connect: packet::ConnectPacket, mut stream: Box<dyn AsyncStream>) -> Result<State> {
-        info!("CONNECT received: client_id={}, clean_session={}", connect.client_id, connect.clean_session);
+        info!("CONNECT received: client_id={}, clean_session={}, will_flag={}", 
+              connect.client_id, connect.clean_session, connect.will_flag);
 
         // Check for empty client ID with clean_session=false
         if connect.client_id.is_empty() && !connect.clean_session {
@@ -302,6 +321,20 @@ impl Session {
         // Update session parameters
         self.clean_session.store(connect.clean_session, Ordering::Release);
         self.keep_alive.store(connect.keep_alive, Ordering::Release);
+        
+        // Store Will message if present
+        if connect.will_flag {
+            if let (Some(topic), Some(payload)) = (connect.will_topic, connect.will_payload) {
+                let will = WillMessage {
+                    topic,
+                    payload,
+                    qos: connect.will_qos,
+                    retain: connect.will_retain,
+                };
+                *self.will_message.lock().await = Some(will);
+                info!("Stored Will message for session {}", self.id());
+            }
+        }
 
         // Handle client ID and potential session takeover
         if !connect.client_id.is_empty() {
@@ -431,6 +464,23 @@ impl Session {
 
     async fn on_disconnect(&self) -> Result<bool> {
         info!("DISCONNECT received for session {}", self.id());
+        // Clear Will message on normal disconnect
+        *self.will_message.lock().await = None;
         Ok(false)
+    }
+    
+    async fn publish_will(&self) {
+        if let Some(will) = self.will_message.lock().await.take() {
+            info!("Publishing Will message for session {}: topic={}", self.id(), will.topic);
+            let packet = packet::PublishPacket {
+                topic: will.topic,
+                packet_id: None, // Will messages are QoS 0 for Milestone 1
+                payload: will.payload,
+                qos: packet::QoS::AtMostOnce, // For Milestone 1, treat all as QoS 0
+                retain: will.retain,
+                dup: false,
+            };
+            self.broker.route(packet).await;
+        }
     }
 }

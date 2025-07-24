@@ -4,125 +4,64 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 
 ## Features
 
-### Current (Milestone 1) 🔄
-- **MQTT v3.1.1 protocol support** with all packet types (CONNECT, CONNACK, PUBLISH, SUBSCRIBE, UNSUBSCRIBE, PINGREQ, PINGRESP, DISCONNECT)
-- **Message routing system** with topic filtering and MQTT wildcard support (`+` single-level, `#` multi-level)
-- **Event-driven architecture** with tokio::select! based packet handling
-- **Race-condition-free shutdown** using CancellationToken across all components
-- **Session management** with half-connected session tracking and proper cleanup
-- **Transport abstraction** supporting multiple protocols (TCP, WebSocket, TLS)
-- **Thread-safe operations** using RwLock and Arc for optimal concurrent access
-- **UNIX signal handling** (SIGINT graceful shutdown, SIGTERM immediate exit)
-- **Comprehensive testing** with 44 tests covering packet handling, routing, clean session, keep-alive, and retained messages
+- **MQTT v3.1.1 protocol support** with all packet types
+- **Message routing** with full MQTT wildcard support (`+` single-level, `#` multi-level)
+- **Clean session** with session takeover and proper cleanup
+- **Keep-alive mechanism** with configurable timeouts
+- **Retained messages** with storage limits and wildcard delivery
+- **Will messages** (Last Will and Testament) support
+- **Event-driven architecture** using tokio::select! for high performance
+- **Race-condition-free shutdown** using CancellationToken
+- **Multi-broker architecture** supporting multiple transport protocols
+- **Thread-safe operations** with optimal concurrent access patterns
+- **UNIX signal handling** (SIGINT graceful, SIGTERM immediate)
+- **Comprehensive configuration** with TOML support
+- **Extensive test coverage** with 67 tests validating all functionality
 
-### Completed ✅
-- Multi-broker architecture with Server → Broker → Session hierarchy
-- Graceful shutdown with connection draining
-- SessionId management with anonymous and client-based IDs
-- Stream write lock deadlock prevention
-- Comprehensive configuration system with TOML support
-- **Clean session logic** with proper session takeover and DISCONNECT notifications
-- **Keep-alive mechanism** with configurable timeouts and automatic session cleanup
-- **Retained messages** with configurable storage limits and wildcard delivery
+## Current Status
 
-## Development Roadmap
+IoTD is currently in **Milestone 1** development, implementing a full MQTT v3.1.1 server with QoS=0 support.
 
-### **Milestone 1**: Full MQTTv3 Server (QoS=0, no persistency/auth) 🔄
-- ✅ Basic working architecture
-- ✅ CONNECT, CONNACK, PUBLISH packet handling tested
-- ✅ All packet types tested (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
-- ✅ **Recently completed**: Message routing system with MQTT wildcard support (`+`, `#`)
-- ✅ **Clean session logic** with session takeover and DISCONNECT notifications
-- ✅ **Keep-alive mechanism** with configurable timeouts and ping/pong handling
-- ✅ **Retained messages** with update/delete support and wildcard matching
-- ❌ Will messages
+### Completed Features ✅
+- **Complete MQTT v3.1.1 protocol support** with all packet types
+- **Message routing system** with full MQTT wildcard support (`+`, `#`)
+- **Clean session logic** with session takeover and DISCONNECT notifications
+- **Keep-alive mechanism** with configurable timeouts and automatic cleanup
+- **Retained messages** with storage limits and wildcard delivery
+- **Will messages** (Last Will and Testament) support
+- **Race-condition-free architecture** using CancellationToken
+- **Comprehensive test suite** with 67 tests (31 packet unit tests, 10 router unit tests, 26 integration tests)
 
-### **Milestone 2**: QoS=1 Support (in-memory)
-- QoS=1 message acknowledgment
-- Message persistence in memory
-- Duplicate message handling
+### In Progress 🔄
+- Protocol compliance enhancements (error codes, client ID validation)
 
-### **Milestone 3**: Basic Persistency & QoS=2
-- Persistent storage interface
-- QoS=2 message handling
-- Session state persistence
+### Upcoming Features 📋
+- QoS=1 and QoS=2 support
+- Persistent storage backends
+- Authentication and authorization
+- TLS/SSL and WebSocket transports
+- Production-ready features (metrics, monitoring, clustering)
 
-### **Milestone 4**: Basic Authentication
-- Config file-based authentication
-- User credentials management
-- Connection authentication
-
-### **Milestone 5**: Enhanced Transport Layer
-- TLS/SSL support
-- WebSocket transport
-- Transport layer security
-
-### **Milestone 6**: Pluggable Architecture
-- Pluggable persistence backends
-- Pluggable authentication providers
-- Pluggable authorization systems
-
-### **Milestone 7**: Production Ready
-- Enhanced logging and metrics
-- Comprehensive documentation
-- Usage examples and tutorials
-- Single-node MQTT server for production use
+For a detailed development roadmap, see [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture
 
-```
-iotd/
-├── src/
-│   ├── protocol/          # MQTT protocol implementation
-│   ├── server.rs          # Core server orchestration
-│   ├── broker.rs          # Connection broker per transport
-│   ├── session.rs         # Session management
-│   ├── router.rs          # Message routing
-│   ├── transport.rs       # Transport abstraction
-│   ├── config.rs          # Configuration management
-│   ├── storage/           # Persistence layer (Milestone 3+)
-│   └── auth/              # Authentication/Authorization (Milestone 4+)
-├── docs/                  # Architecture and roadmap documentation
-├── tests/                 # Integration tests
-├── benches/              # Performance benchmarks
-└── docker/               # Docker configuration
-```
+IoTD follows a modular, event-driven architecture built on Tokio's async runtime:
 
-### Current Architecture
+- **Server → Broker → Session → Router** hierarchy for clean separation of concerns
+- **Event-driven design** using `tokio::select!` for responsive packet handling
+- **Race-condition-free** shutdown using `CancellationToken` throughout
+- **Thread-safe operations** with optimal locking strategies
+- **Zero-copy message routing** for maximum performance
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Server                               │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │   Broker    │  │   Broker    │  │   Broker    │        │
-│  │  (TCP)      │  │  (WebSocket)│  │  (TLS)      │        │
-│  └─────────────┘  └─────────────┘  └─────────────┘        │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────────┤
-│  │              Sessions (by sessionId)                    │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
-│  │  │  Session    │  │  Session    │  │  Session    │    │
-│  │  │ (sessionId) │  │ (sessionId) │  │ (sessionId) │    │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘    │
-│  └─────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────────────────────────────────────────────────┤
-│  │                    Router                               │
-│  │           (Routes by sessionId internally)              │
-│  └─────────────────────────────────────────────────────────┤
-│                                                             │
-│  Config • Transport • Shutdown Management                  │
-└─────────────────────────────────────────────────────────────┘
-```
+Key components:
+- `server.rs` - Lifecycle management and signal handling
+- `broker.rs` - Connection acceptance and session management
+- `session.rs` - Client state machine and packet processing
+- `router.rs` - Publish/subscribe with wildcard support
+- `protocol/` - MQTT v3.1.1 packet encoding/decoding
 
-### Key Design Decisions
-
-- **CancellationToken**: Used throughout for race-condition-free shutdown
-- **Half-connected sessions**: Tracked separately until CONNECT received
-- **Stream passing**: Packet handlers receive stream reference to avoid deadlocks
-- **Thread-safe cleanup**: Lock-based swap pattern for safe concurrent operations
-- **Event-driven**: tokio::select! for responsive packet and shutdown handling
+For detailed architecture documentation, see [docs/arch.md](docs/arch.md).
 
 ## Quick Start
 
