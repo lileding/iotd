@@ -294,7 +294,7 @@ impl Session {
 
         // Send CONNACK response
         let connack = packet::ConnAckPacket {
-            session_present: !connect.clean_session,
+            session_present: false, // New connection, no existing session
             return_code: crate::protocol::v3::connect_return_codes::ACCEPTED,
         };
         let mut buf = bytes::BytesMut::new();
@@ -307,8 +307,10 @@ impl Session {
     }
 
     async fn on_takeover(&self, stream: &mut Box<dyn AsyncStream>, clean_session: bool, keep_alive: u16) -> Result<()> {
+        // Session present is true if clean_session=false (persistent session was resumed)
+        let session_present = !clean_session;
         let connack = packet::ConnAckPacket {
-            session_present: !clean_session,
+            session_present,
             return_code: v3::connect_return_codes::ACCEPTED,
         };
         let mut buf = bytes::BytesMut::new();

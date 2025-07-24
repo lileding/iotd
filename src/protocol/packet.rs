@@ -190,6 +190,7 @@ impl Packet {
             Packet::SubAck(packet) => encode_suback(packet, buf),
             Packet::UnsubAck(packet) => encode_unsuback(packet, buf),
             Packet::PingResp => encode_pingresp(buf),
+            Packet::Disconnect => encode_disconnect(buf),
             _ => {} // Other packets not implemented yet
         }
     }
@@ -385,6 +386,11 @@ fn encode_unsuback(packet: &UnsubAckPacket, buf: &mut BytesMut) {
     buf.put_u8(0xB0); // UNSUBACK packet type
     buf.put_u8(2); // Remaining length
     buf.put_u16(packet.packet_id);
+}
+
+fn encode_disconnect(buf: &mut BytesMut) {
+    buf.put_u8(0xE0); // DISCONNECT packet type
+    buf.put_u8(0); // Remaining length
 }
 
 fn encode_pingresp(buf: &mut BytesMut) {
