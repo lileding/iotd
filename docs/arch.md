@@ -116,6 +116,7 @@ pub struct Session {
     connected: AtomicBool,
     message_rx: RwLock<Option<mpsc::Receiver<bytes::Bytes>>>,
     message_tx: mpsc::Sender<bytes::Bytes>,
+    last_activity: RwLock<tokio::time::Instant>,
 }
 ```
 
@@ -129,9 +130,17 @@ pub struct Session {
 **Lifecycle:**
 1. **Creation**: Generate anonymous sessionId and track as half-connected
 2. **Connection**: Process CONNECT packet, update sessionId if clientId provided
-3. **Registration**: Register with server after CONNACK sent
+3. **Registration**: Register with server after CONNACK sent (handles session takeover)
 4. **Message Processing**: Enter main event loop with tokio::select!
-5. **Cleanup**: Remove from half-connected (if needed), unregister from server, close stream
+5. **Keep-Alive**: Monitor client activity and disconnect if keep-alive timeout exceeded
+6. **Cleanup**: Remove from half-connected (if needed), unregister from server, close stream
+
+**Session Takeover:**
+When a client connects with `clean_session=false` and an existing session exists:
+- Old session receives DISCONNECT packet notification
+- Old session enters `WaitTakeover` state for 5 seconds
+- New session takes over immediately
+- Ensures proper cleanup and prevents message loss
 
 **Event Loop:**
 ```rust
@@ -300,13 +309,13 @@ pub trait AsyncStream: Send + Sync {
 - Complete MQTT v3.1.1 packet handling (all packet types tested)
 - Message routing system with topic filtering and MQTT wildcard support
 - Session lifecycle management with proper cleanup
-- Comprehensive test suite (33 tests: 10 router unit tests, 23 integration/packet tests)
+- **Clean session logic** with session takeover and DISCONNECT notifications
+- **Keep-alive mechanism** with configurable timeouts and automatic cleanup
+- Comprehensive test suite (40 tests: 10 router unit tests, 30 integration/packet tests)
 
 ### ❌ Missing for Milestone 1
-- Clean session logic
 - Retained messages
 - Will messages
-- Keep-alive mechanism
 
 ## Performance Characteristics
 

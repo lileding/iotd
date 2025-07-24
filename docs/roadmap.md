@@ -22,13 +22,13 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 - ✅ Comprehensive configuration system with TOML support
 - ✅ Complete MQTT v3.1.1 packet handling (all packet types tested)
 - ✅ **Message routing system** with topic filtering and MQTT wildcard support (`+`, `#`)
-- ✅ Comprehensive test suite (33 tests: 10 router unit tests, 23 integration/packet tests)
+- ✅ **Clean session logic** with session takeover and DISCONNECT notifications
+- ✅ **Keep-alive mechanism** with configurable timeouts and ping/pong handling
+- ✅ Comprehensive test suite (40 tests: 10 router unit tests, 30 integration/packet tests)
 
 **❌ Missing Core Features:**
-- ❌ Clean session logic (handle `clean_session=false`)
 - ❌ Retained messages (store and deliver to new subscribers)
 - ❌ Will messages (store on CONNECT, deliver on abnormal disconnect)
-- ❌ Keep-alive mechanism (monitor timeouts, cleanup expired sessions)
 - ❌ Protocol compliance (proper error codes, client ID validation)
 
 **Architecture Status:**
@@ -38,13 +38,13 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 - ✅ Thread-safe cleanup using lock-based swap pattern
 - ✅ Atomic operations for performance optimization
 
-**Timeline**: 2-3 weeks remaining
+**Timeline**: 1-2 weeks remaining
 **Success Criteria**:
-- [ ] All MQTT v3.1.1 packet types working
-- [ ] Message routing between clients functional
-- [ ] Clean session behavior implemented
+- [✓] All MQTT v3.1.1 packet types working
+- [✓] Message routing between clients functional
+- [✓] Clean session behavior implemented
 - [ ] Retained and will messages working
-- [ ] Keep-alive timeouts handled
+- [✓] Keep-alive timeouts handled
 - [ ] Full protocol compliance
 
 ---
@@ -216,9 +216,10 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 ### v0.1.0 - MQTTv3 Foundation (Milestone 1) 🔄
 - Complete MQTT v3.1.1 server
 - QoS 0 messaging with routing
-- Clean session, retained messages, will messages
-- Keep-alive mechanism
-- Event-driven architecture
+- Clean session with takeover support ✓
+- Keep-alive mechanism ✓
+- Retained messages and will messages (in progress)
+- Event-driven architecture ✓
 
 ### v0.2.0 - Quality of Service (Milestone 2) 📋
 - QoS 1 support with acknowledgments

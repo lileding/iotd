@@ -13,7 +13,7 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 - **Transport abstraction** supporting multiple protocols (TCP, WebSocket, TLS)
 - **Thread-safe operations** using RwLock and Arc for optimal concurrent access
 - **UNIX signal handling** (SIGINT graceful shutdown, SIGTERM immediate exit)
-- **Comprehensive testing** with 33 tests covering packet handling and routing
+- **Comprehensive testing** with 40 tests covering packet handling, routing, clean session, and keep-alive
 
 ### Completed ✅
 - Multi-broker architecture with Server → Broker → Session hierarchy
@@ -21,6 +21,8 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 - SessionId management with anonymous and client-based IDs
 - Stream write lock deadlock prevention
 - Comprehensive configuration system with TOML support
+- **Clean session logic** with proper session takeover and DISCONNECT notifications
+- **Keep-alive mechanism** with configurable timeouts and automatic session cleanup
 
 ## Development Roadmap
 
@@ -29,10 +31,10 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 - ✅ CONNECT, CONNACK, PUBLISH packet handling tested
 - ✅ All packet types tested (SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT)
 - ✅ **Recently completed**: Message routing system with MQTT wildcard support (`+`, `#`)
-- ❌ Clean session logic
+- ✅ **Clean session logic** with session takeover and DISCONNECT notifications
+- ✅ **Keep-alive mechanism** with configurable timeouts and ping/pong handling
 - ❌ Retained messages
 - ❌ Will messages
-- ❌ Keep-alive mechanism
 
 ### **Milestone 2**: QoS=1 Support (in-memory)
 - QoS=1 message acknowledgment
