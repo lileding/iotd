@@ -1,0 +1,136 @@
+name: Build Release Binaries
+
+on:
+  release:
+    types: [created]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build - ${{ matrix.platform.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          # Linux builds
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            command: cargo
+
+          - name: linux-x86_64-musl
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            command: cargo
+
+          - name: linux-aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            command: cross
+
+          - name: linux-aarch64-musl
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            command: cross
+
+          # macOS builds
+          - name: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            command: cargo
+
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            command: cargo
+
+          # Windows builds
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            command: cargo
+            extension: .exe
+
+    runs-on: ${{ matrix.platform.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.target }}
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          if [[ "${{ matrix.platform.target }}" == "x86_64-unknown-linux-musl" ]]; then
+            sudo apt-get install -y musl-tools
+          fi
+
+      - name: Install cross
+        if: matrix.platform.command == 'cross'
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build binary
+        run: |
+          ${{ matrix.platform.command }} build --release --target ${{ matrix.platform.target }}
+
+      - name: Package binary
+        shell: bash
+        run: |
+          cd target/${{ matrix.platform.target }}/release
+          
+          # Binary name
+          BINARY_NAME="iotd${{ matrix.platform.extension || '' }}"
+          ASSET_NAME="iotd-${{ github.ref_name }}-${{ matrix.platform.name }}${{ matrix.platform.extension || '' }}"
+          
+          # Create archive
+          if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
+            # For Windows, create a zip
+            7z a "$ASSET_NAME.zip" "$BINARY_NAME"
+            echo "ASSET_PATH=$ASSET_NAME.zip" >> $GITHUB_ENV
+          else
+            # For Unix, create a tar.gz
+            tar czf "$ASSET_NAME.tar.gz" "$BINARY_NAME"
+            echo "ASSET_PATH=$ASSET_NAME.tar.gz" >> $GITHUB_ENV
+          fi
+          
+          # Move to workspace root
+          mv "$ASSET_NAME"* $GITHUB_WORKSPACE/
+          
+          # Also prepare just the binary for checksums
+          cp "$BINARY_NAME" "$GITHUB_WORKSPACE/$ASSET_NAME"
+
+      - name: Upload to Release
+        uses: shogo82148/actions-upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ${{ env.ASSET_PATH }}
+
+      - name: Generate checksum
+        shell: bash
+        run: |
+          if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
+            # For Windows, use certutil
+            certutil -hashfile "iotd-${{ github.ref_name }}-${{ matrix.platform.name }}.exe" SHA256 | head -n 2 | tail -n 1 > "iotd-${{ github.ref_name }}-${{ matrix.platform.name }}.exe.sha256"
+          else
+            # For Unix, use sha256sum
+            sha256sum "iotd-${{ github.ref_name }}-${{ matrix.platform.name }}" | cut -d' ' -f1 > "iotd-${{ github.ref_name }}-${{ matrix.platform.name }}.sha256"
+          fi
+
+      - name: Upload checksum
+        uses: shogo82148/actions-upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: iotd-${{ github.ref_name }}-${{ matrix.platform.name }}${{ matrix.platform.extension || '' }}.sha256
+          asset_content_type: text/plain
