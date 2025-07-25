@@ -45,6 +45,34 @@ async fn read_connack(stream: &mut TcpStream) {
     assert_eq!(connack[3], 0x00); // Success
 }
 
+async fn send_subscribe(stream: &mut TcpStream, topic: &str, qos: u8, packet_id: u16) {
+    let mut subscribe_packet = vec![
+        0x82, // SUBSCRIBE packet type with QoS=1
+        (5 + topic.len()) as u8, // Remaining length
+        (packet_id >> 8) as u8, (packet_id & 0xFF) as u8, // Packet ID
+        (topic.len() >> 8) as u8, topic.len() as u8, // Topic length
+    ];
+    subscribe_packet.extend_from_slice(topic.as_bytes());
+    subscribe_packet.push(qos); // Requested QoS
+    
+    stream.write_all(&subscribe_packet).await.unwrap();
+}
+
+async fn read_suback(stream: &mut TcpStream) {
+    let mut header = [0u8; 2];
+    stream.read_exact(&mut header).await.unwrap();
+    assert_eq!(header[0], 0x90); // SUBACK
+    
+    let remaining_len = header[1] as usize;
+    assert!(remaining_len >= 3, "SUBACK remaining length too small: {}", remaining_len);
+    
+    let mut payload = vec![0u8; remaining_len];
+    stream.read_exact(&mut payload).await.unwrap();
+    // Skip packet ID (first 2 bytes) and check return code
+    assert!(payload.len() >= 3, "SUBACK payload too small: {} bytes", payload.len());
+    assert!(payload[2] <= 2, "Invalid QoS granted: {}", payload[2]); // Valid QoS granted
+}
+
 #[tokio::test]
 async fn test_qos1_publish_puback() {
     init_test_logging();
@@ -754,6 +782,106 @@ async fn test_qos_downgrade() {
     let puback = [0x40, 0x02, (packet_id >> 8) as u8, (packet_id & 0xFF) as u8];
     sub_qos1.write_all(&puback).await.unwrap();
 
+    let _ = server.stop().await;
+}
+
+#[tokio::test]
+async fn test_qos1_message_ordering() {
+    init_test_logging();
+    
+    // Start server
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+    
+    // Connect subscriber
+    let mut sub = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut sub, "subscriber").await;
+    read_connack(&mut sub).await;
+    
+    // Subscribe with QoS=1 to a specific topic
+    send_subscribe(&mut sub, "test/topic", 1, 1).await;
+    read_suback(&mut sub).await;
+    
+    // Connect publisher
+    let mut pub_stream = TcpStream::connect(&address).await.unwrap();
+    send_connect(&mut pub_stream, "publisher").await;
+    read_connack(&mut pub_stream).await;
+    
+    // Publish 3 messages quickly with QoS=1 to the same topic
+    for i in 1..=3 {
+        let payload = format!("message{}", i);
+        let mut packet = vec![
+            0x32, // PUBLISH with QoS=1
+            (2 + 10 + 2 + payload.len()) as u8, // Remaining length: topic_len(2) + topic(10) + packet_id(2) + payload
+            0x00, 0x0A, // Topic length = 10
+            b't', b'e', b's', b't', b'/', b't', b'o', b'p', b'i', b'c',
+            0x00, i, // Packet ID = i
+        ];
+        packet.extend_from_slice(payload.as_bytes());
+        
+        pub_stream.write_all(&packet).await.unwrap();
+        
+        // Read PUBACK from broker
+        let mut puback = [0u8; 4];
+        pub_stream.read_exact(&mut puback).await.unwrap();
+        assert_eq!(puback[0], 0x40); // PUBACK
+        assert_eq!(puback[2], 0x00);
+        assert_eq!(puback[3], i);
+        
+        info!("Publisher sent message{} and received PUBACK", i);
+    }
+   
+    // Subscriber should receive first message immediately
+    let mut header = [0u8; 2];
+    sub.read_exact(&mut header).await.unwrap();
+    assert_eq!(header[0], 0x32); // PUBLISH with QoS=1
+    
+    let mut payload = vec![0u8; header[1] as usize];
+    sub.read_exact(&mut payload).await.unwrap();
+    
+    // Verify it's message1
+    let msg = String::from_utf8(payload[14..].to_vec()).unwrap(); // Skip topic + packet ID
+    assert_eq!(msg, "message1");
+    info!("Subscriber received message1");
+    
+    // Delay before sending PUBACK to test ordering
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    
+    // Send PUBACK for message1
+    let puback = [0x40, 0x02, 0x00, 0x01]; // Packet ID = 1
+    sub.write_all(&puback).await.unwrap();
+    info!("Subscriber sent PUBACK for message1");
+    
+    // Now should receive message2
+    sub.read_exact(&mut header).await.unwrap();
+    assert_eq!(header[0], 0x32);
+    
+    payload = vec![0u8; header[1] as usize];
+    sub.read_exact(&mut payload).await.unwrap();
+    
+    let msg = String::from_utf8(payload[14..].to_vec()).unwrap();
+    assert_eq!(msg, "message2");
+    info!("Subscriber received message2");
+    
+    // Send PUBACK for message2
+    let puback = [0x40, 0x02, 0x00, 0x02]; // Packet ID = 2
+    sub.write_all(&puback).await.unwrap();
+    
+    // Now should receive message3
+    sub.read_exact(&mut header).await.unwrap();
+    assert_eq!(header[0], 0x32);
+    
+    payload = vec![0u8; header[1] as usize];
+    sub.read_exact(&mut payload).await.unwrap();
+    
+    let msg = String::from_utf8(payload[14..].to_vec()).unwrap();
+    assert_eq!(msg, "message3");
+    info!("Subscriber received message3");
+    
+    info!("All messages received in correct order!");
+    
     let _ = server.stop().await;
 }
 

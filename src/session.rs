@@ -3,9 +3,9 @@ use crate::{
     protocol::packet, protocol::v3,
     transport::AsyncStream,
 };
-use std::{pin::Pin, future::Future, sync::Arc, collections::HashMap};
+use std::{pin::Pin, future::Future, sync::Arc, collections::VecDeque};
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncWrite, AsyncWriteExt},
     sync::mpsc,
     task::JoinHandle,
     time::{Duration, Instant},
@@ -13,7 +13,7 @@ use tokio::{
 use tracing::{debug, info, error};
 use uuid::Uuid;
 use thiserror::Error;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 
 pub struct Session {
     id: String,
@@ -34,7 +34,8 @@ struct Runtime {
     keep_alive: u16,
     will_message: Option<WillMessage>,
     next_packet_id: u16,  // For generating packet IDs for outgoing QoS > 0 messages
-    inflight_messages: HashMap<u16, InflightMessage>,  // Track unacknowledged QoS=1 messages
+    qos1_queue: VecDeque<packet::PublishPacket>,  // Queue for QoS=1 messages waiting to be sent
+    qos1_pending: Option<InflightMessage>,  // Currently in-flight QoS=1 message
 }
 
 #[derive(Debug, Clone)]
@@ -104,7 +105,8 @@ impl Session {
                     keep_alive: 0,
                     will_message: None,
                     next_packet_id: 1,  // Start from 1, 0 is reserved
-                    inflight_messages: HashMap::new(),
+                    qos1_queue: VecDeque::new(),
+                    qos1_pending: None,
                 };
 
                 runtime.run().await;
@@ -149,7 +151,7 @@ impl Runtime {
         };
         id
     }
-    
+
     /// Calculate the next retry interval using exponential backoff
     fn calculate_next_retry_interval(
         base_interval_ms: u64,
@@ -160,17 +162,17 @@ impl Runtime {
         if base_interval_ms == 0 {
             return 0; // Retransmission disabled
         }
-        
+
         // Ensure multiplier is at least 1.0
         let safe_multiplier = multiplier.max(1.0);
-        
+
         // Calculate exponential interval
         let exponential_interval = (base_interval_ms as f64) * 
             (safe_multiplier as f64).powi(retry_count as i32);
-        
+
         // Cap at maximum interval
         let capped_interval = exponential_interval.min(max_interval_ms as f64);
-        
+
         capped_interval as u64
     }
 
@@ -254,7 +256,7 @@ impl Runtime {
         // Retransmission timer for QoS=1 messages
         let retransmission_interval_ms = self.broker.config().server.get_retransmission_interval_ms();
         let retransmission_enabled = retransmission_interval_ms > 0;
-        
+
         // Timer ticks at half the retransmission interval to check which messages are due
         let timer_interval = if retransmission_enabled {
             // Tick at half the interval for timely checks
@@ -262,7 +264,7 @@ impl Runtime {
         } else {
             Duration::from_secs(3600 * 24) // 24 hours - effectively disabled
         };
-        
+
         let mut retransmit_interval = tokio::time::interval(timer_interval);
         retransmit_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Skip the first tick
@@ -275,7 +277,7 @@ impl Runtime {
                     let success = match pack {
                         Ok(pack) => {
                             debug!("Session {} received packet: {:?}", self.id, pack);
-                            self.on_packet(pack).await.unwrap_or_else(|e| {
+                            self.on_packet(pack, &mut writer).await.unwrap_or_else(|e| {
                                 info!("Session {} error: {}", self.id, e);
                                 false
                             })
@@ -293,42 +295,8 @@ impl Runtime {
                     }
                 }
 
-                Some(mut message) = self.message_rx.recv() => {
-                    // Assign packet ID for outgoing QoS > 0 PUBLISH messages
-                    if let packet::Packet::Publish(ref mut pub_packet) = message {
-                        if pub_packet.qos != packet::QoS::AtMostOnce && pub_packet.packet_id.is_none() {
-                            let packet_id = self.next_packet_id();
-                            pub_packet.packet_id = Some(packet_id);
-                            debug!("Assigned packet_id={} for outgoing PUBLISH to session {}", 
-                                  packet_id, self.id);
-                            
-                            // Track QoS=1 messages for acknowledgment
-                            if pub_packet.qos == packet::QoS::AtLeastOnce {
-                                let config = self.broker.config();
-                                let base_interval = config.server.get_retransmission_interval_ms();
-                                let initial_retry_interval = Self::calculate_next_retry_interval(
-                                    base_interval,
-                                    0, // Initial retry count
-                                    config.server.get_backoff_multiplier(),
-                                    config.server.retransmission_max_interval_ms
-                                );
-                                
-                                let inflight = InflightMessage {
-                                    packet: pub_packet.clone(),
-                                    timestamp: Instant::now(),
-                                    retry_count: 0,
-                                    next_retry_interval_ms: initial_retry_interval,
-                                };
-                                self.inflight_messages.insert(packet_id, inflight);
-                                debug!("Tracking QoS=1 message with packet_id={}, total inflight: {}, next retry in {}ms", 
-                                      packet_id, self.inflight_messages.len(), initial_retry_interval);
-                            }
-                        }
-                    }
-                    
-                    let mut buf = bytes::BytesMut::new();
-                    message.encode(&mut buf);
-                    if let Err(e) = writer.write_all(&buf).await {
+                Some(message) = self.message_rx.recv() => {
+                    if let Err(e) = self.on_message(message, &mut writer).await {
                         info!("Session {} error: {}", self.id, e);
                         if !self.clean_session {
                             next_state = State::WaitTakeover;
@@ -341,7 +309,7 @@ impl Runtime {
                     if let Some(Command::Takeover(
                             mut new_stream, clean_session, keep_alive)) = command {
                         // Disconnect original client
-                        let mut buf = bytes::BytesMut::new();
+                        let mut buf = BytesMut::new();
                         packet::Packet::Disconnect.encode(&mut buf);
                         let _ = writer.write_all(&buf).await;
 
@@ -378,66 +346,12 @@ impl Runtime {
                 }
 
                 _ = retransmit_interval.tick() => {
-                    // Skip retransmission if disabled (interval = 0)
-                    let config = self.broker.config();
-                    if config.server.get_retransmission_interval_ms() == 0 {
-                        continue;
-                    }
-                    
-                    // Retransmit all unacknowledged QoS=1 messages that are due
-                    let now = Instant::now();
-                    let mut retransmit_packets = Vec::new();
-                    let mut packets_to_remove = Vec::new();
-                    let max_retransmission_limit = config.server.max_retransmission_limit;
-                    
-                    for (packet_id, inflight) in self.inflight_messages.iter() {
-                        // Check if we've exceeded max retransmission limit
-                        if inflight.retry_count >= max_retransmission_limit {
-                            info!("Message packet_id={} exceeded max retransmission limit ({}), dropping", 
-                                  packet_id, max_retransmission_limit);
-                            packets_to_remove.push(*packet_id);
-                            continue;
+                    if let Err(e) = self.on_retransmit(&mut writer).await {
+                        error!("Retransmission error: {}", e);
+                        if !self.clean_session {
+                            next_state = State::WaitTakeover;
                         }
-                        
-                        // Check if it's time for this specific message's retry
-                        let elapsed_ms = now.duration_since(inflight.timestamp).as_millis() as u64;
-                        if elapsed_ms >= inflight.next_retry_interval_ms {
-                            let mut packet = inflight.packet.clone();
-                            packet.dup = true;  // Set DUP flag for retransmission
-                            retransmit_packets.push((*packet_id, packet));
-                        }
-                    }
-                    
-                    // Remove packets that exceeded retry limit
-                    for packet_id in packets_to_remove {
-                        self.inflight_messages.remove(&packet_id);
-                    }
-                    
-                    // Send retransmitted messages
-                    for (packet_id, packet) in retransmit_packets {
-                        debug!("Retransmitting QoS=1 message with packet_id={} for session {}", 
-                              packet_id, self.id);
-                        if let Err(e) = self.message_tx.send(packet::Packet::Publish(packet)).await {
-                            error!("Failed to send retransmitted message: {}", e);
-                        }
-                        
-                        // Update timestamp and calculate next retry interval
-                        if let Some(inflight) = self.inflight_messages.get_mut(&packet_id) {
-                            inflight.timestamp = now;
-                            inflight.retry_count += 1;
-                            
-                            // Calculate next retry interval with exponential backoff
-                            inflight.next_retry_interval_ms = Self::calculate_next_retry_interval(
-                                config.server.get_retransmission_interval_ms(),
-                                inflight.retry_count,
-                                config.server.get_backoff_multiplier(),
-                                config.server.retransmission_max_interval_ms
-                            );
-                            
-                            info!("Retransmitted message packet_id={}, retry_count={}/{}, next retry in {}ms", 
-                                  packet_id, inflight.retry_count, max_retransmission_limit, 
-                                  inflight.next_retry_interval_ms);
-                        }
+                        break;
                     }
                 }
             }
@@ -484,7 +398,7 @@ impl Runtime {
                 session_present: false,
                 return_code: v3::connect_return_codes::UNACCEPTABLE_PROTOCOL_VERSION,
             };
-            let mut buf = bytes::BytesMut::new();
+            let mut buf = BytesMut::new();
             packet::Packet::ConnAck(connack).encode(&mut buf);
             stream.write_all(&buf).await?;
             return Ok(State::Cleanup);
@@ -499,7 +413,7 @@ impl Runtime {
                     session_present: false,
                     return_code: v3::connect_return_codes::IDENTIFIER_REJECTED,
                 };
-                let mut buf = bytes::BytesMut::new();
+                let mut buf = BytesMut::new();
                 packet::Packet::ConnAck(connack).encode(&mut buf);
                 stream.write_all(&buf).await?;
                 return Ok(State::Cleanup);
@@ -512,7 +426,7 @@ impl Runtime {
                     session_present: false,
                     return_code: v3::connect_return_codes::IDENTIFIER_REJECTED,
                 };
-                let mut buf = bytes::BytesMut::new();
+                let mut buf = BytesMut::new();
                 packet::Packet::ConnAck(connack).encode(&mut buf);
                 stream.write_all(&buf).await?;
                 return Ok(State::Cleanup);
@@ -523,7 +437,7 @@ impl Runtime {
                 session_present: false,
                 return_code: v3::connect_return_codes::IDENTIFIER_REJECTED,
             };
-            let mut buf = bytes::BytesMut::new();
+            let mut buf = BytesMut::new();
             packet::Packet::ConnAck(connack).encode(&mut buf);
             stream.write_all(&buf).await?;
             return Ok(State::Cleanup);
@@ -565,7 +479,7 @@ impl Runtime {
             session_present: false, // New connection, no existing session
             return_code: crate::protocol::v3::connect_return_codes::ACCEPTED,
         };
-        let mut buf = bytes::BytesMut::new();
+        let mut buf = BytesMut::new();
         packet::Packet::ConnAck(connack).encode(&mut buf);
         stream.write_all(&buf).await?;
 
@@ -580,7 +494,7 @@ impl Runtime {
             session_present,
             return_code: v3::connect_return_codes::ACCEPTED,
         };
-        let mut buf = bytes::BytesMut::new();
+        let mut buf = BytesMut::new();
         packet::Packet::ConnAck(connack).encode(&mut buf);
         match stream.write_all(&buf).await {
             Ok(_) => {
@@ -597,14 +511,14 @@ impl Runtime {
         }
     }
 
-    async fn on_packet(&mut self, pack: packet::Packet) -> Result<bool> {
+    async fn on_packet<W: AsyncWrite + Unpin>(&mut self, pack: packet::Packet, writer: &mut W) -> Result<bool> {
         // Read and parse MQTT packet from stream
         match pack {
-            packet::Packet::Publish(p) => self.on_publish(p).await,
-            packet::Packet::PubAck(p) => self.on_puback(p).await,
-            packet::Packet::Subscribe(p) => self.on_subscribe(p).await,
-            packet::Packet::Unsubscribe(p) => self.on_unsubscribe(p).await,
-            packet::Packet::PingReq => self.on_pingreq().await,
+            packet::Packet::Publish(p) => self.on_publish(p, writer).await,
+            packet::Packet::PubAck(p) => self.on_puback(p, writer).await,
+            packet::Packet::Subscribe(p) => self.on_subscribe(p, writer).await,
+            packet::Packet::Unsubscribe(p) => self.on_unsubscribe(p, writer).await,
+            packet::Packet::PingReq => self.on_pingreq(writer).await,
             packet::Packet::Disconnect => self.on_disconnect().await,
             _ => {
                 error!("Unhandled packet type for session {}", self.id);
@@ -613,22 +527,93 @@ impl Runtime {
         }
     }
 
-    async fn on_puback(&mut self, packet: packet::PubAckPacket) -> Result<bool> {
-        info!("PUBACK received for session {}: packet_id={}", self.id, packet.packet_id);
-        
-        // Remove the acknowledged message from inflight tracking
-        if let Some(inflight) = self.inflight_messages.remove(&packet.packet_id) {
-            let elapsed = inflight.timestamp.elapsed();
-            info!("QoS=1 message acknowledged: packet_id={}, elapsed={:?}, remaining inflight: {}", 
-                  packet.packet_id, elapsed, self.inflight_messages.len());
-        } else {
-            debug!("Received PUBACK for unknown packet_id={}", packet.packet_id);
+    async fn send_next_qos1_message<W: AsyncWrite + Unpin>(&mut self, writer: &mut W) -> Result<()> {
+        if self.qos1_pending.is_some() {
+            return Ok(());
         }
-        
+
+        if let Some(mut packet) = self.qos1_queue.pop_front() {
+            // Assign packet ID
+            let packet_id = self.next_packet_id();
+            packet.packet_id = Some(packet_id);
+
+            debug!("Sending QoS=1 message from queue with packet_id={}, remaining: {}", 
+                packet_id, self.qos1_queue.len());
+
+            // Track for retransmission
+            let config = self.broker.config();
+            let base_interval = config.server.get_retransmission_interval_ms();
+            let initial_retry_interval = Self::calculate_next_retry_interval(
+                base_interval,
+                0,
+                config.server.get_backoff_multiplier(),
+                config.server.retransmission_max_interval_ms
+            );
+
+            let inflight = InflightMessage {
+                packet: packet.clone(),
+                timestamp: Instant::now(),
+                retry_count: 0,
+                next_retry_interval_ms: initial_retry_interval,
+            };
+
+            // Mark as pending
+            self.qos1_pending = Some(inflight);
+
+            // Send the packet
+            let mut buf = BytesMut::new();
+            packet::Packet::Publish(packet).encode(&mut buf);
+            writer.write_all(&buf).await?;
+        }
+        Ok(())
+    }
+
+    async fn on_message<W: AsyncWrite + Unpin>(&mut self, message: packet::Packet, writer: &mut W) -> Result<()> {
+        match message {
+            // Handle PUBLISH packets
+            packet::Packet::Publish(pub_packet) => {
+                // Check if this is a new message without packet_id (from router)
+                if pub_packet.qos == packet::QoS::AtLeastOnce {
+                    // Event 1: New QoS=1 message - queue it
+                    debug!("Received new QoS=1 message for ordered delivery");
+                    self.qos1_queue.push_back(pub_packet);
+
+                    // If no message is pending, send the next one
+                    self.send_next_qos1_message(writer).await?;
+                } else {
+                    // QoS=0 or already has packet_id (retransmission)
+                    let mut buf = BytesMut::new();
+                    packet::Packet::Publish(pub_packet).encode(&mut buf);
+                    writer.write_all(&buf).await?;
+                }
+            }
+
+            // Ignore other packet types (PUBACK, SUBACK, PINGRESP, etc) to client
+            _ => {
+            }
+        }
+        Ok(())
+    }
+
+    async fn on_puback<W: AsyncWrite + Unpin>(&mut self, packet: packet::PubAckPacket, writer: &mut W) -> Result<bool> {
+        info!("PUBACK received for session {}: packet_id={}", self.id, packet.packet_id);
+
+        // Event 3: Send PUBACK to mailbox
+        // Check if this acknowledges the pending message
+        if let Some(pending) = &self.qos1_pending {
+            if pending.packet.packet_id == Some(packet.packet_id) {
+                debug!("PUBACK acknowledged pending QoS=1 message");
+
+                // Clear pending and send next message
+                self.qos1_pending = None;
+                self.send_next_qos1_message(writer).await?;
+            }
+        }
+
         Ok(true)
     }
 
-    async fn on_publish(&mut self, packet: packet::PublishPacket) -> Result<bool> {
+    async fn on_publish<W: AsyncWrite + Unpin>(&mut self, packet: packet::PublishPacket, writer: &mut W) -> Result<bool> {
         info!("PUBLISH received for session {}: topic={}, qos={:?}, retain={}, dup={}", 
             self.id, packet.topic, packet.qos, packet.retain, packet.dup);
 
@@ -637,9 +622,11 @@ impl Runtime {
             if let Some(packet_id) = packet.packet_id {
                 // Always send PUBACK for QoS=1 (even for duplicates)
                 let puback = packet::PubAckPacket { packet_id };
-                self.message_tx.send(packet::Packet::PubAck(puback)).await?;
+                let mut buf = BytesMut::new();
+                packet::Packet::PubAck(puback).encode(&mut buf);
+                writer.write_all(&buf).await?;
                 info!("Sent PUBACK for packet_id={} to session {}", packet_id, self.id);
-                
+
                 // Check DUP flag - if it's a duplicate, don't route
                 if packet.dup {
                     info!("Received duplicate PUBLISH with packet_id={}, not routing", packet_id);
@@ -658,7 +645,7 @@ impl Runtime {
         Ok(true)
     }
 
-    async fn on_subscribe(&mut self, packet: packet::SubscribePacket) -> Result<bool> {
+    async fn on_subscribe<W: AsyncWrite + Unpin>(&mut self, packet: packet::SubscribePacket, writer: &mut W) -> Result<bool> {
         info!("SUBSCRIBE received for session {}: topics={:?}", self.id, packet.topic_filters);
 
         // Handle subscription logic through router
@@ -673,7 +660,9 @@ impl Runtime {
             packet_id: packet.packet_id,
             return_codes,
         };
-        self.message_tx.send(packet::Packet::SubAck(suback)).await?;
+        let mut buf = BytesMut::new();
+        packet::Packet::SubAck(suback).encode(&mut buf);
+        writer.write_all(&buf).await?;
 
         // Then send any retained messages
         for retained_msg in retained_messages {
@@ -683,7 +672,7 @@ impl Runtime {
         Ok(true)
     }
 
-    async fn on_unsubscribe(&mut self, packet: packet::UnsubscribePacket) -> Result<bool> {
+    async fn on_unsubscribe<W: AsyncWrite + Unpin>(&mut self, packet: packet::UnsubscribePacket, writer: &mut W) -> Result<bool> {
         info!("UNSUBSCRIBE received for session {}: topics={:?}", self.id, packet.topic_filters);
 
         // Handle unsubscription logic through router
@@ -693,13 +682,17 @@ impl Runtime {
         let unsuback = packet::UnsubAckPacket {
             packet_id: packet.packet_id,
         };
-        self.message_tx.send(packet::Packet::UnsubAck(unsuback)).await?;
+        let mut buf = BytesMut::new();
+        packet::Packet::UnsubAck(unsuback).encode(&mut buf);
+        writer.write_all(&buf).await?;
         Ok(true)
     }
 
-    async fn on_pingreq(&mut self) -> Result<bool> {
+    async fn on_pingreq<W: AsyncWrite + Unpin>(&mut self, writer: &mut W) -> Result<bool> {
         info!("PINGREQ received for session {}", self.id);
-        self.message_tx.send(packet::Packet::PingResp).await?;
+        let mut buf = BytesMut::new();
+        packet::Packet::PingResp.encode(&mut buf);
+        writer.write_all(&buf).await?;
         Ok(true)
     }
 
@@ -708,6 +701,70 @@ impl Runtime {
         // Clear Will message on normal disconnect
         self.will_message.take();
         Ok(false)
+    }
+
+    async fn on_retransmit<W: AsyncWrite + Unpin>(&mut self, writer: &mut W) -> Result<()> {
+        // Event 2: Retransmission tick
+        // Get config values before any mutable borrows
+        let retransmission_interval_ms = self.broker.config().server.get_retransmission_interval_ms();
+        if retransmission_interval_ms == 0 {
+            return Ok(()); // Continue - retransmission disabled
+        }
+
+        let max_retransmission_limit = self.broker.config().server.max_retransmission_limit;
+        let backoff_multiplier = self.broker.config().server.get_backoff_multiplier();
+        let retransmission_max_interval_ms = self.broker.config().server.retransmission_max_interval_ms;
+
+        if let Some(inflight) = &self.qos1_pending {
+            let now = Instant::now();
+            let elapsed_ms = now.duration_since(inflight.timestamp).as_millis() as u64;
+
+            // Check if interval is ok for retry
+            if elapsed_ms >= inflight.next_retry_interval_ms {
+                // Check max retransmission limit first
+                if inflight.retry_count >= max_retransmission_limit {
+                    info!("Message packet_id={:?} exceeded max retransmission limit ({}), dropping", 
+                        inflight.packet.packet_id, max_retransmission_limit);
+
+                    // Clear pending
+                    self.qos1_pending = None;
+
+                    // After dropping, send next message from queue
+                    self.send_next_qos1_message(writer).await?;
+                } else {
+                    // Send the packet with DUP flag
+                    let mut packet = inflight.packet.clone();
+                    packet.dup = true;
+
+                    debug!("Retransmitting QoS=1 message with packet_id={:?} for session {}", 
+                        packet.packet_id, self.id);
+
+                    let mut buf = BytesMut::new();
+                    packet::Packet::Publish(packet).encode(&mut buf);
+                    writer.write_all(&buf).await?;
+
+                    // Update inflight tracking
+                    if let Some(inflight) = &mut self.qos1_pending {
+                        inflight.timestamp = now;
+                        inflight.retry_count += 1;
+                        inflight.next_retry_interval_ms = Self::calculate_next_retry_interval(
+                            retransmission_interval_ms,
+                            inflight.retry_count,
+                            backoff_multiplier,
+                            retransmission_max_interval_ms
+                        );
+
+                        info!("Retransmitted message packet_id={:?}, retry_count={}/{}, next retry in {}ms", 
+                            inflight.packet.packet_id, inflight.retry_count, max_retransmission_limit, 
+                            inflight.next_retry_interval_ms);
+                    }
+                }
+            }
+            // else: interval not ok, just return (continue)
+        }
+        // else: No pending message - this is normal
+
+        Ok(()) // Continue
     }
 
     async fn publish_will(&mut self) {
