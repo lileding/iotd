@@ -48,17 +48,23 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 
 ---
 
-### Milestone 2: QoS=1 Support (in-memory) 📋 **PLANNED**
+### Milestone 2: QoS=1 Support (in-memory) 🚀 **IN PROGRESS**
 **Target**: QoS=1 message delivery with in-memory persistence
 
-**Features to Implement:**
-- 📋 QoS=1 (At least once) message delivery
-- 📋 Message acknowledgment (PUBACK) handling
-- 📋 Message retransmission logic with exponential backoff
-- 📋 Packet identifier management
-- 📋 In-memory message persistence for unacknowledged messages
-- 📋 Duplicate message detection and handling
-- 📋 Session state management for QoS=1
+**Completed Features:**
+- ✅ QoS=1 (At least once) message delivery
+- ✅ Message acknowledgment (PUBACK) handling
+- ✅ Message retransmission logic with exponential backoff
+- ✅ In-memory message tracking for unacknowledged messages
+- ✅ Duplicate message detection and handling (DUP flag)
+- ✅ Message ordering guarantees per session
+- ✅ Configurable retransmission intervals and limits
+
+**Remaining Features:**
+- 📋 Packet identifier management with recycling
+- 📋 Session state recovery on reconnection
+- 📋 Flow control and in-flight window limits
+- 📋 Performance optimization under high QoS=1 load
 
 **Technical Challenges:**
 - Message deduplication algorithms
@@ -222,11 +228,14 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 - Protocol compliance and validation ✓
 - Event-driven architecture ✓
 
-### v0.2.0 - Quality of Service (Milestone 2) 📋
-- QoS 1 support with acknowledgments
-- In-memory message persistence
-- Message retransmission logic
-- Duplicate detection
+### v0.2.0 - Quality of Service (Milestone 2) 🚀 **IN PROGRESS**
+- QoS 1 support with acknowledgments ✓
+- In-memory message tracking ✓
+- Message retransmission logic ✓
+- Duplicate detection ✓
+- Message ordering guarantees ✓
+- Packet ID management (in progress)
+- Session state recovery (in progress)
 
 ### v0.3.0 - Persistence & QoS 2 (Milestone 3) 💾
 - Pluggable storage interface

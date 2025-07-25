@@ -2,6 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## IMPORTANT: MQTT 3.1.1 Specification Compliance
+
+**You MUST follow the MQTT 3.1.1 Specification exactly.**
+**You should NOT design features not presented in the MQTT 3.1.1 Specification.**
+
+When implementing MQTT features:
+1. Always refer to the official MQTT 3.1.1 specification
+2. Do not add "improvements" beyond what the spec requires
+3. Keep implementations simple and spec-compliant
+4. Avoid over-engineering based on assumptions
+
 ## Development Commands
 
 ### Building and Running
@@ -76,23 +87,32 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The ar
 5. **Event-driven**: tokio::select! for responsive packet and shutdown handling
 6. **Session Management**: SessionId starts as `__anon_$uuid`, becomes `__client_$clientId` after CONNECT
 
-### Current Status (Milestone 1)
+### Current Status (Milestone 2 - QoS=1 Support)
 
-**✅ Completed:**
-- Event-driven architecture with tokio::select! 
+**✅ Milestone 1 Completed:**
+- Event-driven architecture with tokio::select!
 - Race-condition-free shutdown using CancellationToken
-- Half-connected session tracking and cleanup
-- Stream deadlock prevention
-- UNIX signal handling (SIGINT graceful, SIGTERM immediate)
-- Complete MQTT v3.1.1 packet handling (all packet types tested)
-- **Message routing system** with topic filtering and MQTT wildcard support (`+`, `#`)
-- **Clean session logic** with session takeover and DISCONNECT notifications
-- **Keep-alive mechanism** with configurable timeouts and automatic cleanup
-- Comprehensive test suite (40 tests: 10 router unit tests, 30 integration/packet tests)
+- Complete MQTT v3.1.1 packet handling (all packet types)
+- Message routing system with topic filtering and wildcard support
+- Clean session logic with session takeover
+- Keep-alive mechanism
+- Retained messages with wildcard delivery
+- Will messages (Last Will and Testament)
+- Comprehensive test suite (74+ tests)
 
-**❌ Missing for Milestone 1:**
-- Retained messages
-- Will messages
+**✅ Milestone 2 Progress:**
+- QoS=1 message delivery with PUBACK acknowledgment
+- Message retransmission with DUP flag
+- In-flight message tracking
+- Direct response pattern for reduced latency
+- Message ordering guarantees (though not required by spec)
+
+**📋 Milestone 2 Remaining:**
+- Simplify implementation to match MQTT 3.1.1 spec exactly
+- Remove over-engineered features (exponential backoff, ordered queue)
+- Implement proper packet ID management
+- Support multiple in-flight messages
+- Session state recovery for clean_session=false
 
 ### Project Structure
 - `src/auth/` - Authentication and authorization (Milestone 4+)

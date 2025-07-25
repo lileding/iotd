@@ -116,16 +116,22 @@ Sessions represent individual client connections with a sophisticated state mach
 - **Stream deadlock prevention**: Handlers receive stream references
 - **Keep-alive monitoring**: Automatic timeout detection
 - **Will message handling**: Storage and automatic publishing
+- **QoS=1 message ordering**: Queue-based ordered delivery per session
+- **Message retransmission**: Exponential backoff with configurable limits
+- **Direct response pattern**: Handlers write directly to client for lower latency
 
 ```rust
 pub struct Session {
     id: String,                                    // Unique session ID
-    client_id: Mutex<Option<String>>,             // MQTT client ID
-    clean_session: AtomicBool,                    // Clean session flag
-    keep_alive: AtomicU16,                        // Keep-alive seconds
-    stream: Mutex<Option<Box<dyn AsyncStream>>>,  // Network stream
+    client_id: Option<String>,                    // MQTT client ID
+    clean_session: bool,                          // Clean session flag
+    keep_alive: u16,                              // Keep-alive seconds
+    stream: Option<Box<dyn AsyncStream>>,         // Network stream
     message_tx: mpsc::Sender<Packet>,             // Outgoing messages
-    will_message: Mutex<Option<WillMessage>>,     // Last Will storage
+    will_message: Option<WillMessage>,            // Last Will storage
+    next_packet_id: u16,                          // For generating packet IDs
+    qos1_queue: VecDeque<PublishPacket>,         // QoS=1 messages waiting to send
+    qos1_pending: Option<InflightMessage>,        // Currently in-flight QoS=1 message
 }
 ```
 
@@ -242,9 +248,11 @@ To prevent deadlocks, locks are acquired in a consistent order:
 - Proper cleanup on task termination
 
 ### Message Passing
-- MPSC channels for session mailboxes
+- MPSC channels for session mailboxes (router → session)
+- Direct response pattern for control packets (reduced overhead)
 - Bounded channels to prevent memory exhaustion
 - Non-blocking sends with overflow handling
+- QoS=1 queue for ordered message delivery
 
 ## Error Handling
 
@@ -265,6 +273,8 @@ To prevent deadlocks, locks are acquired in a consistent order:
 - Zero-copy message routing
 - Efficient topic matching algorithms
 - Configurable buffer sizes
+- Single in-flight QoS=1 message per session
+- VecDeque for efficient message queueing
 
 ### CPU Efficiency
 - Lock-free operations where possible

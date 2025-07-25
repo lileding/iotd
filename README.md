@@ -30,11 +30,11 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 
 ## Current Status
 
-**IoTD has successfully completed Milestone 1! 🎉**
+**IoTD is actively developing Milestone 2 - QoS=1 Support! 🚀**
 
-The project now provides a fully functional MQTT v3.1.1 server with QoS=0 support, ready for development and testing use cases.
+The project has completed Milestone 1 (full MQTT v3.1.1 server with QoS=0) and is now implementing QoS=1 "at least once" delivery guarantees.
 
-### Completed Features ✅
+### Milestone 1 Features ✅ (Completed)
 - **Complete MQTT v3.1.1 protocol support** with all packet types
 - **Message routing system** with full MQTT wildcard support (`+`, `#`)
 - **Clean session logic** with session takeover and DISCONNECT notifications
@@ -46,8 +46,19 @@ The project now provides a fully functional MQTT v3.1.1 server with QoS=0 suppor
 - **Race-condition-free architecture** using CancellationToken
 - **Comprehensive test suite** with 74 tests (36 unit tests, 29 integration tests, 9 packet tests)
 
+### Milestone 2 Progress 🚧 (In Development)
+- ✅ **In-flight message tracking** - Messages tracked until acknowledged
+- ✅ **PUBACK handling** - Proper acknowledgment flow for QoS=1
+- ✅ **Message retransmission** - Automatic retry with exponential backoff
+- ✅ **DUP flag handling** - Duplicate detection and prevention
+- ✅ **Message ordering** - Guaranteed ordered delivery per session
+- ✅ **Configurable retransmission** - Intervals, limits, and backoff
+- 📋 **Packet ID management** - Recycling and collision detection
+- 📋 **Session state recovery** - Reconnection with pending messages
+- 📋 **Flow control** - In-flight message window limits
+
 ### Upcoming Features 📋
-- **Milestone 2**: QoS=1 support with message acknowledgments
+- **Milestone 2** (Current): Completing QoS=1 support with session state
 - **Milestone 3**: QoS=2 support and persistent storage backends
 - **Milestone 4**: Authentication and authorization
 - **Milestone 5**: TLS/SSL and WebSocket transports
