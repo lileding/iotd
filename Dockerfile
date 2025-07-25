@@ -1,20 +1,36 @@
-FROM rust:slim as builder
+# Build stage with musl target for static linking
+FROM rust:alpine as builder
+
+# Install build dependencies
+RUN apk add --no-cache musl-dev
 
 WORKDIR /app
+
+# Copy manifests
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
 COPY benches ./benches
 
+# Build dependencies first (for better caching)
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release
+RUN rm -rf src
+
+# Copy source code
+COPY src ./src
+
+# Build the application
+ARG GIT_REVISION
+ENV GIT_REVISION=${GIT_REVISION}
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+# Runtime stage using busybox
+FROM busybox:latest
 
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Copy the statically linked binary
+COPY --from=builder /app/target/release/iotd /usr/bin/iotd
 
-COPY --from=builder /app/target/release/iotd /usr/local/bin/iotd
-
+# Expose MQTT port
 EXPOSE 1883
 
-CMD ["iotd"]
+# Use ENTRYPOINT for better signal handling
+ENTRYPOINT ["/usr/bin/iotd"]
