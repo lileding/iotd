@@ -30,11 +30,13 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 
 ## Current Status
 
-**IoTD is actively developing Milestone 2 - QoS=1 Support! 🚀**
+**IoTD has nearly completed Milestone 2 - QoS=1 Support! 🚀**
 
-The project has completed Milestone 1 (full MQTT v3.1.1 server with QoS=0) and is now implementing QoS=1 "at least once" delivery guarantees.
+The project has implemented full QoS=1 "at least once" delivery guarantees. Only cleanup tasks remain before moving to Milestone 3 (Persistence).
 
-### Milestone 1 Features ✅ (Completed)
+### Completed Features ✅
+
+#### Milestone 1 - Basic MQTT Server (QoS=0)
 - **Complete MQTT v3.1.1 protocol support** with all packet types
 - **Message routing system** with full MQTT wildcard support (`+`, `#`)
 - **Clean session logic** with session takeover and DISCONNECT notifications
@@ -44,26 +46,34 @@ The project has completed Milestone 1 (full MQTT v3.1.1 server with QoS=0) and i
 - **Protocol compliance** with validation, error codes, and client ID rules
 - **Topic validation** for both topic names and subscription filters
 - **Race-condition-free architecture** using CancellationToken
-- **Comprehensive test suite** with 74 tests (36 unit tests, 29 integration tests, 9 packet tests)
+- **Comprehensive test suite** with 74+ tests
 
-### Milestone 2 Progress 🚧 (In Development)
-- ✅ **In-flight message tracking** - Messages tracked until acknowledged
-- ✅ **PUBACK handling** - Proper acknowledgment flow for QoS=1
-- ✅ **Message retransmission** - Automatic retry with exponential backoff
-- ✅ **DUP flag handling** - Duplicate detection and prevention
-- ✅ **Message ordering** - Guaranteed ordered delivery per session
-- ✅ **Configurable retransmission** - Intervals, limits, and backoff
-- 📋 **Packet ID management** - Recycling and collision detection
-- 📋 **Session state recovery** - Reconnection with pending messages
-- 📋 **Flow control** - In-flight message window limits
+#### Milestone 2 - QoS=1 Support (Nearly Complete)
+- ✅ **QoS=1 message delivery** - "At least once" guarantee implemented
+- ✅ **PUBACK handling** - Proper acknowledgment flow
+- ✅ **Message retransmission** - Automatic retry with DUP flag
+- ✅ **Multiple in-flight messages** - No artificial ordering constraints
+- ✅ **Duplicate detection** - Prevents routing duplicates
+- ✅ **Configurable retransmission** - Interval and retry limits
+- ✅ **Comprehensive QoS=1 tests** - All edge cases covered
+- 📋 **Packet ID management** - Basic implementation, needs collision detection
+- 📋 **Session persistence** - For clean_session=false support
 
-### Upcoming Features 📋
-- **Milestone 2** (Current): Completing QoS=1 support with session state
-- **Milestone 3**: QoS=2 support and persistent storage backends
-- **Milestone 4**: Authentication and authorization
-- **Milestone 5**: TLS/SSL and WebSocket transports
-- **Milestone 6**: Pluggable architecture
-- **Milestone 7**: Production-ready features (metrics, monitoring, clustering)
+### Roadmap 📋
+
+#### Near-term (v0.x - v1.0)
+- **Milestone 2** (Current): Final QoS=1 cleanup tasks
+- **Milestone 3**: Persistence layer (SQLite, file-based)
+- **Milestone 4**: Security (TLS, authentication, ACLs)
+- **Milestone 5**: QoS=2 "exactly once" delivery
+- **Milestone 6**: Observability (Prometheus, Grafana)
+- **Milestone 7**: Flow control & production features
+- **v1.0**: Production-ready single-node broker
+
+#### Long-term (v2.0+)
+- **v2.0**: MQTT 5.0 protocol support
+- **v3.0**: Clustering and high availability
+- **v4.0**: Multi-tenancy and enterprise features
 
 For a detailed development roadmap, see [docs/roadmap.md](docs/roadmap.md).
 
@@ -159,9 +169,10 @@ docker run -p 1883:1883 iotd
 
 Optimized for:
 - **Low latency**: Async I/O with Tokio
-- **Low memory**: Efficient data structures (DashMap, bytes)
-- **High throughput**: Lock-free concurrent operations
-- **Single binary**: No external dependencies in runtime
+- **High throughput**: Multiple in-flight QoS=1 messages
+- **Memory efficient**: ~8.45 KB per connection
+- **Single binary**: No external dependencies
+- **MQTT spec compliant**: Strict adherence to MQTT 3.1.1
 
 ### Benchmark Results
 

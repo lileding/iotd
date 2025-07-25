@@ -82,137 +82,142 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 
 ---
 
-### Milestone 3: Basic Persistency & QoS=2 💾 **PLANNED**
-**Target**: Persistent storage interface and QoS=2 support
+### Milestone 3: Persistence Layer 💾 **PLANNED**
+**Target**: Persistent storage for messages and sessions
 
 **Features to Implement:**
 - 💾 Persistent storage interface with pluggable backends
-- 💾 QoS=2 (Exactly once) message delivery
-- 💾 Two-phase commit protocol (PUBREC/PUBREL/PUBCOMP)
-- 💾 Message durability guarantees
-- 💾 Session state persistence
+- 💾 Session state persistence (clean_session=false)
 - 💾 Retained message persistence
+- 💾 In-flight message persistence for QoS=1
 - 💾 File-based and SQLite storage implementations
+- 💾 Message recovery on restart
+- 💾 Storage compaction and cleanup
 
 **Technical Challenges:**
-- Complex state machine for QoS=2 flow
-- Transaction-like message handling
+- Efficient storage of session state
+- Fast message recovery on startup
 - Storage consistency guarantees
-- Performance optimization for persistent storage
-
-**Timeline**: 8-10 weeks
-**Success Criteria**:
-- [ ] QoS=2 messages delivered exactly once
-- [ ] Data survives server restarts
-- [ ] Storage backend configurable
-- [ ] Acceptable performance with persistence
-
----
-
-### Milestone 4: Basic Authentication 🔐 **PLANNED**
-**Target**: Config file-based authentication
-
-**Features to Implement:**
-- 🔐 Username/password authentication
-- 🔐 Config file-based user management
-- 🔐 TLS/SSL support for TCP connections
-- 🔐 Basic client certificate authentication
-- 🔐 Authentication result caching
-- 🔐 Secure configuration management
-
-**Authentication Methods:**
-- Built-in user database (config file)
-- File-based authentication
-- Client certificate authentication
-- Future: Database auth, LDAP, OAuth2
+- Performance optimization for persistence
 
 **Timeline**: 6-8 weeks
 **Success Criteria**:
+- [ ] Messages and sessions survive server restarts
+- [ ] Storage backend configurable
+- [ ] Acceptable performance with persistence
+- [ ] Reliable recovery mechanisms
+
+---
+
+### Milestone 4: Security (TLS, Auth, ACL) 🔐 **PLANNED**
+**Target**: TLS encryption, authentication, and authorization
+
+**Features to Implement:**
+- 🔐 TLS/SSL support for encrypted connections
+- 🔐 Username/password authentication
+- 🔐 Client certificate authentication
+- 🔐 Topic-based access control lists (ACLs)
+- 🔐 Config file-based user and ACL management
+- 🔐 Authentication result caching
+- 🔐 Authorization for publish/subscribe operations
+
+**Security Features:**
+- TLS 1.2/1.3 support
+- Multiple authentication methods
+- Fine-grained topic permissions
+- Connection rate limiting
+- Secure defaults
+
+**Timeline**: 8-10 weeks
+**Success Criteria**:
+- [ ] TLS encryption working properly
 - [ ] Only authenticated clients can connect
-- [ ] Multiple authentication methods supported
-- [ ] TLS encryption working
-- [ ] Secure configuration practices
+- [ ] ACLs enforce topic access
+- [ ] Performance acceptable with security enabled
 
 ---
 
-### Milestone 5: Enhanced Transport Layer 🔗 **PLANNED**
-**Target**: TLS and multiple transport protocols
+### Milestone 5: QoS=2 Support 🎯 **PLANNED**
+**Target**: Exactly-once delivery guarantee
 
 **Features to Implement:**
-- 🔗 Enhanced TLS/SSL support
-- 🔗 WebSocket MQTT support (ws://)
-- 🔗 Secure WebSocket support (wss://)
-- 🔗 Unix domain socket support
-- 🔗 Protocol negotiation and detection
-- 🔗 Cross-protocol message routing
+- 🎯 QoS=2 (Exactly once) message delivery
+- 🎯 PUBREC/PUBREL/PUBCOMP flow
+- 🎯 Two-phase commit protocol
+- 🎯 Message state persistence for QoS=2
+- 🎯 Duplicate detection across restarts
+- 🎯 Proper error handling and recovery
 
-**Supported Protocols:**
-- `tcp://` - Plain TCP (existing)
-- `tcp+tls://` - TLS-encrypted TCP
-- `ws://` - WebSocket over HTTP
-- `wss://` - WebSocket over HTTPS
-- `unix://` - Unix domain sockets
+**Technical Challenges:**
+- Complex state machine for QoS=2 flow
+- Ensuring exactly-once semantics
+- Performance impact of two-phase protocol
+- Recovery after crashes
 
-**Timeline**: 8-10 weeks
+**Timeline**: 6-8 weeks
 **Success Criteria**:
-- [ ] Multiple protocols working simultaneously
-- [ ] Seamless message routing across protocols
-- [ ] Web browser clients supported
-- [ ] Performance maintained across protocols
+- [ ] QoS=2 messages delivered exactly once
+- [ ] Proper handling of all edge cases
+- [ ] State survives server restarts
+- [ ] Acceptable performance
 
 ---
 
-### Milestone 6: Pluggable Architecture 🔧 **PLANNED**
-**Target**: Pluggable persistence, authentication, and authorization
+### Milestone 6: Observability & Monitoring 📊 **PLANNED**
+**Target**: Production-grade monitoring with Grafana
 
 **Features to Implement:**
-- 🔧 Pluggable authentication backends
-- 🔧 Pluggable authorization providers
-- 🔧 Pluggable persistence backends
-- 🔧 Topic-based access control lists (ACLs)
-- 🔧 Role-based access control (RBAC)
-- 🔧 Dynamic configuration updates
+- 📊 Prometheus metrics exporter
+- 📊 Structured logging with levels
+- 📊 Grafana dashboard templates
+- 📊 Health check endpoints
+- 📊 Connection and message metrics
+- 📊 Performance metrics and tracing
+- 📊 Alert rule templates
 
-**Plugin Types:**
-- Authentication: Database, LDAP, OAuth2, JWT
-- Authorization: File-based, database, external APIs
-- Storage: PostgreSQL, MySQL, Redis, MongoDB
-- Metrics: Prometheus, InfluxDB, custom collectors
+**Metrics to Export:**
+- Connection count and rate
+- Message throughput by QoS
+- Topic statistics
+- Error rates and types
+- Resource usage (CPU, memory, disk)
+- Latency percentiles
 
-**Timeline**: 10-12 weeks
+**Timeline**: 4-6 weeks
 **Success Criteria**:
-- [ ] Plugin system architecture working
-- [ ] Multiple backend implementations
-- [ ] Runtime plugin loading
-- [ ] Configuration-driven plugin selection
+- [ ] Comprehensive metrics available
+- [ ] Grafana dashboards working
+- [ ] Alerts for common issues
+- [ ] Performance impact minimal
 
 ---
 
-### Milestone 7: Production Ready 🏢 **PLANNED**
-**Target**: Enhanced logging, documentation, and production features
+### Milestone 7: Flow Control & Production Features 🚀 **PLANNED**
+**Target**: Advanced features for production deployment
 
 **Features to Implement:**
-- 🏢 Enhanced logging and structured metrics
-- 🏢 Comprehensive documentation and examples
-- 🏢 Performance optimization and tuning
-- 🏢 Health checks and monitoring endpoints
-- 🏢 Deployment guides and best practices
-- 🏢 Single-node production deployment
+- 🚀 Per-client message rate limiting
+- 🚀 In-flight message window limits
+- 🚀 Connection throttling
+- 🚀 Message size limits
+- 🚀 WebSocket transport support
+- 🚀 Unix domain socket support
+- 🚀 Comprehensive documentation
+- 🚀 Deployment guides and best practices
 
-**Production Features:**
-- Prometheus metrics integration
-- Structured logging with JSON output
-- Health check endpoints
-- Configuration validation
-- Performance benchmarking
-- Docker and Kubernetes deployment
+**Production Enhancements:**
+- Resource usage controls
+- DoS protection mechanisms
+- Multi-protocol support
+- Performance tuning guides
+- Docker and Kubernetes manifests
 
-**Timeline**: 8-10 weeks
+**Timeline**: 6-8 weeks
 **Success Criteria**:
-- [ ] Production-ready single-node deployment
-- [ ] Comprehensive monitoring and alerting
-- [ ] Complete documentation
-- [ ] Performance benchmarks validated
+- [ ] Flow control prevents resource exhaustion
+- [ ] Multiple transport protocols working
+- [ ] Production deployment guide complete
+- [ ] Performance benchmarks documented
 
 ---
 
@@ -237,35 +242,113 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 - Packet ID management (in progress)
 - Session state recovery (in progress)
 
-### v0.3.0 - Persistence & QoS 2 (Milestone 3) 💾
+### v0.3.0 - Persistence (Milestone 3) 💾
 - Pluggable storage interface
-- QoS 2 exactly-once delivery
 - Session state persistence
+- Retained message persistence
 - File and SQLite backends
 
-### v0.4.0 - Authentication (Milestone 4) 🔐
+### v0.4.0 - Security (Milestone 4) 🔐
+- TLS/SSL encryption
 - Username/password authentication
-- TLS/SSL support
 - Client certificate authentication
-- Config-based user management
+- Topic-based ACLs
 
-### v0.5.0 - Multi-Protocol (Milestone 5) 🔗
+### v0.5.0 - QoS=2 (Milestone 5) 🎯
+- Exactly-once delivery
+- PUBREC/PUBREL/PUBCOMP flow
+- Two-phase commit protocol
+- State persistence for QoS=2
+
+### v0.6.0 - Observability (Milestone 6) 📊
+- Prometheus metrics
+- Grafana dashboards
+- Health check endpoints
+- Structured logging
+
+### v0.7.0 - Flow Control (Milestone 7) 🚀
+- Rate limiting
+- In-flight window limits
 - WebSocket support
-- Multiple transport protocols
-- Cross-protocol routing
-- Browser client support
+- Production features
 
-### v0.6.0 - Pluggable Architecture (Milestone 6) 🔧
-- Plugin system
-- Multiple auth/storage backends
-- Topic-based authorization
-- Dynamic configuration
+### v1.0.0 - Production Ready 🏢
+- Complete feature set
+- Battle-tested stability
+- Comprehensive documentation
+- Performance optimized
 
-### v1.0.0 - Production Ready (Milestone 7) 🏢
-- Enhanced monitoring
-- Complete documentation
-- Performance optimization
-- Production deployment ready
+---
+
+## Future Versions (Post 1.0)
+
+### v2.0 - MQTT 5.0 Support 🆕
+**Target**: Full MQTT 5.0 protocol implementation
+
+**Key Features:**
+- Protocol version negotiation
+- Enhanced authentication (AUTH packet)
+- Shared subscriptions
+- Message expiry intervals
+- Request/Response pattern
+- User properties
+- Subscription identifiers
+- Topic aliases for optimization
+- Flow control (receive maximum)
+- Server-initiated disconnect with reason codes
+- Will delay intervals
+- Maximum packet size negotiation
+
+**Backward Compatibility:**
+- Support both MQTT 3.1.1 and 5.0 clients
+- Automatic protocol detection
+- Graceful feature degradation
+
+---
+
+### v3.0 - Cluster Support 🌐
+**Target**: Horizontal scalability and high availability
+
+**Key Features:**
+- Multi-node clustering
+- Session migration between nodes
+- Distributed topic tree
+- Cluster-wide message routing
+- Node discovery and auto-join
+- Split-brain prevention
+- Load balancing strategies
+- Failover and recovery
+- Distributed retained messages
+- Cluster management API
+
+**Architecture:**
+- Raft consensus for cluster state
+- Gossip protocol for node discovery
+- Consistent hashing for topic distribution
+- Active-active or active-passive modes
+
+---
+
+### v4.0 - Multi-tenancy & Soft Isolation 🏢
+**Target**: Enterprise-grade multi-tenant deployment
+
+**Key Features:**
+- Tenant isolation at namespace level
+- Per-tenant resource quotas
+- Separate authentication per tenant
+- Tenant-specific configurations
+- Resource usage monitoring per tenant
+- Cross-tenant communication policies
+- Tenant management API
+- Billing and metering support
+- Data isolation guarantees
+- Compliance and audit trails
+
+**Use Cases:**
+- SaaS MQTT broker offerings
+- Enterprise internal shared infrastructure
+- IoT platform providers
+- Managed MQTT services
 
 ---
 

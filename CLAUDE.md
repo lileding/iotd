@@ -87,7 +87,7 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The ar
 5. **Event-driven**: tokio::select! for responsive packet and shutdown handling
 6. **Session Management**: SessionId starts as `__anon_$uuid`, becomes `__client_$clientId` after CONNECT
 
-### Current Status (Milestone 2 - QoS=1 Support)
+### Current Status (Milestone 2 - Nearly Complete)
 
 **✅ Milestone 1 Completed:**
 - Event-driven architecture with tokio::select!
@@ -100,19 +100,20 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The ar
 - Will messages (Last Will and Testament)
 - Comprehensive test suite (74+ tests)
 
-**✅ Milestone 2 Progress:**
-- QoS=1 message delivery with PUBACK acknowledgment
+**✅ Milestone 2 Completed:**
+- QoS=1 "at least once" delivery guarantee
+- PUBLISH/PUBACK message flow
 - Message retransmission with DUP flag
-- In-flight message tracking
+- Multiple in-flight messages support
+- Duplicate detection and prevention
+- Configurable retransmission interval and limits
 - Direct response pattern for reduced latency
-- Message ordering guarantees (though not required by spec)
+- Comprehensive QoS=1 test coverage
 
-**📋 Milestone 2 Remaining:**
-- Simplify implementation to match MQTT 3.1.1 spec exactly
-- Remove over-engineered features (exponential backoff, ordered queue)
-- Implement proper packet ID management
-- Support multiple in-flight messages
-- Session state recovery for clean_session=false
+**📋 Remaining Cleanup Tasks:**
+- Improve packet ID management (collision detection)
+- Basic session persistence for clean_session=false
+- Performance benchmarks for QoS=1
 
 ### Project Structure
 - `src/auth/` - Authentication and authorization (Milestone 4+)
@@ -124,13 +125,19 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The ar
 
 ### Development Roadmap
 
-**Milestone 1** (Current): Full MQTTv3 Server (QoS=0, no persistency/auth)
-**Milestone 2**: QoS=1 Support (in-memory)
-**Milestone 3**: Basic Persistency & QoS=2
-**Milestone 4**: Basic Authentication
-**Milestone 5**: Enhanced Transport Layer (TLS)
-**Milestone 6**: Pluggable Architecture
-**Milestone 7**: Production Ready
+**Milestone 1** ✅: Full MQTTv3 Server (QoS=0, no persistency/auth)
+**Milestone 2** 🚀: QoS=1 Support (nearly complete)
+**Milestone 3**: Persistence Layer
+**Milestone 4**: Security (TLS, Auth, ACLs)
+**Milestone 5**: QoS=2 Support
+**Milestone 6**: Observability (Prometheus, Grafana)
+**Milestone 7**: Flow Control & Production Features
+**v1.0**: Production Ready
+
+**Future Versions:**
+- **v2.0**: MQTT 5.0 Support
+- **v3.0**: Clustering & High Availability
+- **v4.0**: Multi-tenancy & Enterprise Features
 
 ### Testing Strategy
 - Integration tests connect to test server on different ports (18831, 18832, 18833)
@@ -158,6 +165,8 @@ Default server runs on `127.0.0.1:1883` for MQTT clients.
 - **Wildcard Matching**: Implements MQTT-compliant topic matching with `+` (single-level) and `#` (multi-level) wildcards
 - **Session Takeover**: Clean session=false clients can take over existing sessions with DISCONNECT notification
 - **Keep-Alive Monitoring**: Automatic disconnection of inactive clients based on keep-alive timeout
+- **QoS=1 Support**: Multiple in-flight messages with retransmission and duplicate detection
+- **Spec Compliance**: Strict adherence to MQTT 3.1.1 specification without over-engineering
 
 ### Common Issues and Solutions
 

@@ -116,22 +116,21 @@ Sessions represent individual client connections with a sophisticated state mach
 - **Stream deadlock prevention**: Handlers receive stream references
 - **Keep-alive monitoring**: Automatic timeout detection
 - **Will message handling**: Storage and automatic publishing
-- **QoS=1 message ordering**: Queue-based ordered delivery per session
-- **Message retransmission**: Exponential backoff with configurable limits
+- **QoS=1 support**: Multiple in-flight messages with retransmission
 - **Direct response pattern**: Handlers write directly to client for lower latency
+- **Packet ID generation**: Sequential with wrap-around
 
 ```rust
-pub struct Session {
+pub struct Runtime {
     id: String,                                    // Unique session ID
     client_id: Option<String>,                    // MQTT client ID
     clean_session: bool,                          // Clean session flag
     keep_alive: u16,                              // Keep-alive seconds
     stream: Option<Box<dyn AsyncStream>>,         // Network stream
-    message_tx: mpsc::Sender<Packet>,             // Outgoing messages
+    message_tx: mpsc::Sender<Packet>,             // Outgoing messages  
     will_message: Option<WillMessage>,            // Last Will storage
     next_packet_id: u16,                          // For generating packet IDs
-    qos1_queue: VecDeque<PublishPacket>,         // QoS=1 messages waiting to send
-    qos1_pending: Option<InflightMessage>,        // Currently in-flight QoS=1 message
+    qos1_queue: VecDeque<InflightMessage>,       // In-flight QoS=1 messages
 }
 ```
 
@@ -252,7 +251,7 @@ To prevent deadlocks, locks are acquired in a consistent order:
 - Direct response pattern for control packets (reduced overhead)
 - Bounded channels to prevent memory exhaustion
 - Non-blocking sends with overflow handling
-- QoS=1 queue for ordered message delivery
+- Multiple QoS=1 messages in-flight simultaneously
 
 ## Error Handling
 
@@ -273,8 +272,8 @@ To prevent deadlocks, locks are acquired in a consistent order:
 - Zero-copy message routing
 - Efficient topic matching algorithms
 - Configurable buffer sizes
-- Single in-flight QoS=1 message per session
-- VecDeque for efficient message queueing
+- Multiple in-flight QoS=1 messages
+- VecDeque for efficient retransmission queue
 
 ### CPU Efficiency
 - Lock-free operations where possible
@@ -302,22 +301,32 @@ To prevent deadlocks, locks are acquired in a consistent order:
 ## Testing Strategy
 
 ### Unit Tests
-- Packet encoding/decoding (31 tests)
-- Router wildcard matching and topic validation (15 tests)
+- Packet encoding/decoding
+- Router wildcard matching and topic validation
 - Component isolation tests
 
-### Integration Tests
-- Full protocol flows (29 tests)
+### Integration Tests  
+- Full protocol flows
 - Session lifecycle scenarios
-- Error handling paths
+- QoS=1 delivery guarantees
+- Message retransmission
+- Duplicate handling
 - Will message delivery
 - Protocol compliance validation
-- Topic validation in routing
+
+### QoS=1 Specific Tests
+- Basic PUBLISH/PUBACK flow
+- Message retransmission with DUP flag
+- Duplicate detection and prevention
+- Maximum retry limits
+- Multiple publishers/subscribers
+- QoS downgrade scenarios
+- Message tracking
 
 ### Performance Tests
 - Throughput benchmarks
-- Latency measurements
-- Concurrent connection limits
+- Memory usage per connection
+- QoS=1 vs QoS=0 performance
 
 ## Configuration
 
