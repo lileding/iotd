@@ -42,6 +42,7 @@ struct InflightMessage {
     packet: packet::PublishPacket,
     timestamp: Instant,
     retry_count: u32,
+    next_retry_interval_ms: u64,
 }
 
 pub type Mailbox = mpsc::Sender<packet::Packet>;
@@ -148,6 +149,30 @@ impl Runtime {
         };
         id
     }
+    
+    /// Calculate the next retry interval using exponential backoff
+    fn calculate_next_retry_interval(
+        base_interval_ms: u64,
+        retry_count: u32,
+        multiplier: f32,
+        max_interval_ms: u64
+    ) -> u64 {
+        if base_interval_ms == 0 {
+            return 0; // Retransmission disabled
+        }
+        
+        // Ensure multiplier is at least 1.0
+        let safe_multiplier = multiplier.max(1.0);
+        
+        // Calculate exponential interval
+        let exponential_interval = (base_interval_ms as f64) * 
+            (safe_multiplier as f64).powi(retry_count as i32);
+        
+        // Cap at maximum interval
+        let capped_interval = exponential_interval.min(max_interval_ms as f64);
+        
+        capped_interval as u64
+    }
 
     async fn run(&mut self) {
         let mut state = State::WaitConnect;
@@ -227,12 +252,13 @@ impl Runtime {
         keep_alive_interval.tick().await;
 
         // Retransmission timer for QoS=1 messages
-        let retransmission_interval_ms = self.broker.config().server.retransmission_interval_ms;
+        let retransmission_interval_ms = self.broker.config().server.get_retransmission_interval_ms();
         let retransmission_enabled = retransmission_interval_ms > 0;
         
-        // Use a large interval if retransmission is disabled to avoid unnecessary timer overhead
+        // Timer ticks at half the retransmission interval to check which messages are due
         let timer_interval = if retransmission_enabled {
-            Duration::from_millis(retransmission_interval_ms)
+            // Tick at half the interval for timely checks
+            Duration::from_millis(retransmission_interval_ms / 2)
         } else {
             Duration::from_secs(3600 * 24) // 24 hours - effectively disabled
         };
@@ -278,14 +304,24 @@ impl Runtime {
                             
                             // Track QoS=1 messages for acknowledgment
                             if pub_packet.qos == packet::QoS::AtLeastOnce {
+                                let config = self.broker.config();
+                                let base_interval = config.server.get_retransmission_interval_ms();
+                                let initial_retry_interval = Self::calculate_next_retry_interval(
+                                    base_interval,
+                                    0, // Initial retry count
+                                    config.server.get_backoff_multiplier(),
+                                    config.server.retransmission_max_interval_ms
+                                );
+                                
                                 let inflight = InflightMessage {
                                     packet: pub_packet.clone(),
                                     timestamp: Instant::now(),
                                     retry_count: 0,
+                                    next_retry_interval_ms: initial_retry_interval,
                                 };
                                 self.inflight_messages.insert(packet_id, inflight);
-                                debug!("Tracking QoS=1 message with packet_id={}, total inflight: {}", 
-                                      packet_id, self.inflight_messages.len());
+                                debug!("Tracking QoS=1 message with packet_id={}, total inflight: {}, next retry in {}ms", 
+                                      packet_id, self.inflight_messages.len(), initial_retry_interval);
                             }
                         }
                     }
@@ -343,16 +379,16 @@ impl Runtime {
 
                 _ = retransmit_interval.tick() => {
                     // Skip retransmission if disabled (interval = 0)
-                    let retransmission_interval_ms = self.broker.config().server.retransmission_interval_ms;
-                    if retransmission_interval_ms == 0 {
+                    let config = self.broker.config();
+                    if config.server.get_retransmission_interval_ms() == 0 {
                         continue;
                     }
                     
-                    // Retransmit all unacknowledged QoS=1 messages
+                    // Retransmit all unacknowledged QoS=1 messages that are due
                     let now = Instant::now();
                     let mut retransmit_packets = Vec::new();
                     let mut packets_to_remove = Vec::new();
-                    let max_retransmission_limit = self.broker.config().server.max_retransmission_limit;
+                    let max_retransmission_limit = config.server.max_retransmission_limit;
                     
                     for (packet_id, inflight) in self.inflight_messages.iter() {
                         // Check if we've exceeded max retransmission limit
@@ -363,8 +399,9 @@ impl Runtime {
                             continue;
                         }
                         
-                        // Only retransmit messages older than half the retransmission interval
-                        if now.duration_since(inflight.timestamp) > Duration::from_millis(retransmission_interval_ms / 2) {
+                        // Check if it's time for this specific message's retry
+                        let elapsed_ms = now.duration_since(inflight.timestamp).as_millis() as u64;
+                        if elapsed_ms >= inflight.next_retry_interval_ms {
                             let mut packet = inflight.packet.clone();
                             packet.dup = true;  // Set DUP flag for retransmission
                             retransmit_packets.push((*packet_id, packet));
@@ -384,12 +421,22 @@ impl Runtime {
                             error!("Failed to send retransmitted message: {}", e);
                         }
                         
-                        // Update timestamp for this retransmission
+                        // Update timestamp and calculate next retry interval
                         if let Some(inflight) = self.inflight_messages.get_mut(&packet_id) {
                             inflight.timestamp = now;
                             inflight.retry_count += 1;
-                            info!("Retransmitted message packet_id={}, retry_count={}/{}", 
-                                  packet_id, inflight.retry_count, max_retransmission_limit);
+                            
+                            // Calculate next retry interval with exponential backoff
+                            inflight.next_retry_interval_ms = Self::calculate_next_retry_interval(
+                                config.server.get_retransmission_interval_ms(),
+                                inflight.retry_count,
+                                config.server.get_backoff_multiplier(),
+                                config.server.retransmission_max_interval_ms
+                            );
+                            
+                            info!("Retransmitted message packet_id={}, retry_count={}/{}, next retry in {}ms", 
+                                  packet_id, inflight.retry_count, max_retransmission_limit, 
+                                  inflight.next_retry_interval_ms);
                         }
                     }
                 }
