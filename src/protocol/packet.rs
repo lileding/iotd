@@ -61,7 +61,7 @@ impl TryFrom<u8> for PacketType {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum QoS {
     AtMostOnce = 0,
     AtLeastOnce = 1,
@@ -173,6 +173,13 @@ impl Packet {
             PacketType::Publish => {
                 let packet = decode_publish(&mut payload_cursor, flags)?;
                 Packet::Publish(packet)
+            }
+            PacketType::PubAck => {
+                if remaining_length != 2 {
+                    return Err(PacketError::InvalidPacketType(packet_type as u8));
+                }
+                let packet_id = payload_cursor.get_u16();
+                Packet::PubAck(PubAckPacket { packet_id })
             }
             PacketType::Subscribe => {
                 let packet = decode_subscribe(&mut payload_cursor)?;

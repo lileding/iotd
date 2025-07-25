@@ -2,14 +2,19 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
+use tracing::Level;
 
 static INIT: std::sync::Once = std::sync::Once::new();
 
 pub fn init_test_logging() {
     INIT.call_once(|| {
-        //return;
+        let log_level = std::env::var("RUST_LOG")
+            .ok()
+            .and_then(|s| s.parse::<Level>().ok())
+            .unwrap_or(Level::INFO);
+
         tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
+            .with_max_level(log_level)
             .init();
     });
 }
@@ -45,7 +50,7 @@ async fn test_basic_connect_and_disconnect() {
     // Read CONNACK
     let mut response = [0u8; 4];
     stream.read_exact(&mut response).await.unwrap();
-    
+
     assert_eq!(response[0], 0x20); // CONNACK packet type
     assert_eq!(response[1], 0x02); // Remaining length
     assert_eq!(response[2], 0x00); // Session present = false
@@ -58,6 +63,7 @@ async fn test_basic_connect_and_disconnect() {
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_publish_subscribe() {
@@ -110,7 +116,7 @@ async fn test_publish_subscribe() {
     ];
     publish_packet.extend_from_slice(b"test/"); // Topic "test/"
     publish_packet.extend_from_slice(b"hello"); // Payload "hello"
-    
+
     publisher.write_all(&publish_packet).await.unwrap();
 
     // Read published message on subscriber
@@ -120,7 +126,7 @@ async fn test_publish_subscribe() {
         .unwrap()
         .unwrap();
     assert_eq!(header[0], 0x30); // PUBLISH
-    
+
     let remaining_length = header[1] as usize;
     let mut payload = vec![0u8; remaining_length];
     timeout(Duration::from_secs(1), subscriber.read_exact(&mut payload))
@@ -134,6 +140,7 @@ async fn test_publish_subscribe() {
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_clean_session_false_persistence() {
@@ -205,6 +212,7 @@ async fn test_clean_session_false_persistence() {
     let _ = server.stop().await;
 }
 
+
 #[tokio::test]
 async fn test_clean_session_true_no_persistence() {
     init_test_logging();
@@ -268,6 +276,7 @@ async fn test_clean_session_true_no_persistence() {
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_session_takeover() {
@@ -347,6 +356,7 @@ async fn test_session_takeover() {
     let _ = server.stop().await;
 }
 
+
 #[tokio::test]
 async fn test_clean_session_transition() {
     init_test_logging();
@@ -421,6 +431,7 @@ async fn test_clean_session_transition() {
     let _ = server.stop().await;
 }
 
+
 #[tokio::test]
 async fn test_keep_alive_timeout() {
     init_test_logging();
@@ -443,7 +454,7 @@ async fn test_keep_alive_timeout() {
         b't', b'e', b's', b't', // Client ID
     ];
     stream.write_all(&connect_packet).await.unwrap();
-    
+
     // Read CONNACK
     let mut response = [0u8; 4];
     stream.read_exact(&mut response).await.unwrap();
@@ -463,6 +474,7 @@ async fn test_keep_alive_timeout() {
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_keep_alive_with_pingreq() {
@@ -486,7 +498,7 @@ async fn test_keep_alive_with_pingreq() {
         b't', b'e', b's', b't', // Client ID
     ];
     stream.write_all(&connect_packet).await.unwrap();
-    
+
     // Read CONNACK
     let mut response = [0u8; 4];
     stream.read_exact(&mut response).await.unwrap();
@@ -494,10 +506,10 @@ async fn test_keep_alive_with_pingreq() {
     // Send PINGREQ every 800ms (within keep-alive)
     for _ in 0..3 {
         tokio::time::sleep(Duration::from_millis(800)).await;
-        
+
         let pingreq = [0xC0, 0x00]; // PINGREQ
         stream.write_all(&pingreq).await.unwrap();
-        
+
         // Read PINGRESP
         let mut pingresp = [0u8; 2];
         match timeout(Duration::from_millis(500), stream.read_exact(&mut pingresp)).await {
@@ -515,6 +527,7 @@ async fn test_keep_alive_with_pingreq() {
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_keep_alive_zero_disabled() {
@@ -535,7 +548,7 @@ async fn test_keep_alive_zero_disabled() {
     // Send PINGREQ to check connection is still alive
     let pingreq = [0xC0, 0x00];
     stream.write_all(&pingreq).await.unwrap();
-    
+
     // Should receive PINGRESP
     let mut pingresp = [0u8; 2];
     match timeout(Duration::from_millis(500), stream.read_exact(&mut pingresp)).await {
@@ -547,6 +560,7 @@ async fn test_keep_alive_zero_disabled() {
 
     let _ = server.stop().await;
 }
+
 
 async fn send_connect(stream: &mut TcpStream, client_id: &str) {
     send_connect_with_flags(stream, client_id, 0x02).await; // Default to clean session
@@ -564,7 +578,7 @@ async fn send_connect_with_flags(stream: &mut TcpStream, client_id: &str, flags:
         0x00, client_id.len() as u8, // Client ID length
     ];
     connect_packet.extend_from_slice(client_id.as_bytes());
-    
+
     stream.write_all(&connect_packet).await.unwrap();
     stream.flush().await.unwrap();
 }
@@ -634,7 +648,7 @@ async fn test_retained_message_basic() {
     assert_eq!(suback[2], 0x00); // Packet ID MSB
     assert_eq!(suback[3], 0x01); // Packet ID LSB
     assert_eq!(suback[4], 0x00); // Return code (success)
-    
+
     // Now read retained message
     let mut header = [0u8; 2];
     subscriber.read_exact(&mut header).await.unwrap();
@@ -645,6 +659,7 @@ async fn test_retained_message_basic() {
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_retained_message_update() {
@@ -709,7 +724,7 @@ async fn test_retained_message_update() {
     assert_eq!(suback[2], 0x00); // Packet ID MSB
     assert_eq!(suback[3], 0x01); // Packet ID LSB
     assert_eq!(suback[4], 0x00); // Return code (success)
-    
+
     // Now read retained message
     let mut header = [0u8; 2];
     subscriber.read_exact(&mut header).await.unwrap();
@@ -720,6 +735,7 @@ async fn test_retained_message_update() {
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_retained_message_delete() {
@@ -751,7 +767,7 @@ async fn test_retained_message_delete() {
         0x07, // Remaining length = 7 (no payload)
         0x00, 0x05, // Topic length = 5
         b't', b'e', b's', b't', b'/', // Topic
-        // No payload
+                                      // No payload
     ];
     publisher.write_all(&delete).await.unwrap();
 
@@ -786,6 +802,7 @@ async fn test_retained_message_delete() {
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_retained_message_wildcard() {
@@ -843,7 +860,7 @@ async fn test_retained_message_wildcard() {
     assert_eq!(suback[2], 0x00); // Packet ID MSB
     assert_eq!(suback[3], 0x01); // Packet ID LSB
     assert_eq!(suback[4], 0x00); // Return code (success)
-    
+
     // Now read 2 retained messages
     let mut retained_count = 0;
     for _ in 0..2 {
@@ -858,11 +875,12 @@ async fn test_retained_message_wildcard() {
             _ => break,
         }
     }
-    
+
     assert_eq!(retained_count, 2, "Should receive 2 retained messages for wildcard subscription");
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_will_message_on_disconnect() {
@@ -874,20 +892,20 @@ async fn test_will_message_on_disconnect() {
 
     // Publisher with Will message
     let mut publisher = TcpStream::connect(&address).await.unwrap();
-    
+
     // Send CONNECT with Will
     let mut connect_packet = vec![
         0x10, // CONNECT packet type
         0x00, // Remaining length placeholder - will update
     ];
-    
+
     // Variable header
     connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
     connect_packet.extend_from_slice(b"MQTT"); // Protocol name
     connect_packet.push(0x04); // Protocol level (MQTT 3.1.1)
     connect_packet.push(0x0E); // Connect flags: Will flag=1, Will QoS=0, Will retain=1, Clean session=1
     connect_packet.extend_from_slice(&[0x00, 0x0A]); // Keep-alive = 10 seconds
-    
+
     // Payload
     connect_packet.extend_from_slice(&[0x00, 0x03]); // Client ID length
     connect_packet.extend_from_slice(b"pub"); // Client ID
@@ -895,11 +913,11 @@ async fn test_will_message_on_disconnect() {
     connect_packet.extend_from_slice(b"will/topic"); // Will topic
     connect_packet.extend_from_slice(&[0x00, 0x07]); // Will message length
     connect_packet.extend_from_slice(b"offline"); // Will message
-    
+
     // Update remaining length
     let remaining_len = connect_packet.len() - 2;
     connect_packet[1] = remaining_len as u8;
-    
+
     publisher.write_all(&connect_packet).await.unwrap();
     read_connack(&mut publisher).await;
 
@@ -907,7 +925,7 @@ async fn test_will_message_on_disconnect() {
     let mut subscriber = TcpStream::connect(&address).await.unwrap();
     send_connect(&mut subscriber, "sub").await;
     read_connack(&mut subscriber).await;
-    
+
     // Subscribe to Will topic
     let subscribe_packet = [
         0x82, // SUBSCRIBE packet type
@@ -918,7 +936,7 @@ async fn test_will_message_on_disconnect() {
         0x00, // QoS = 0
     ];
     subscriber.write_all(&subscribe_packet).await.unwrap();
-    
+
     // Read SUBACK
     let mut suback = [0u8; 5];
     subscriber.read_exact(&mut suback).await.unwrap();
@@ -926,7 +944,7 @@ async fn test_will_message_on_disconnect() {
 
     // Abruptly close publisher connection (no DISCONNECT)
     drop(publisher);
-    
+
     // Small delay to allow Will message to be published
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -935,20 +953,21 @@ async fn test_will_message_on_disconnect() {
     subscriber.read_exact(&mut header).await.unwrap();
     // Will message with retain=true should be delivered as retain=false to current subscribers
     assert_eq!(header[0], 0x30); // PUBLISH without retain flag
-    
+
     let mut payload = vec![0u8; header[1] as usize];
     subscriber.read_exact(&mut payload).await.unwrap();
-    
+
     // Verify it's the Will message
     let topic_len = ((payload[0] as usize) << 8) | (payload[1] as usize);
     let topic = std::str::from_utf8(&payload[2..2+topic_len]).unwrap();
     assert_eq!(topic, "will/topic");
-    
+
     let message = &payload[2+topic_len..];
     assert_eq!(message, b"offline");
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_will_message_not_sent_on_disconnect() {
@@ -960,20 +979,20 @@ async fn test_will_message_not_sent_on_disconnect() {
 
     // Publisher with Will message
     let mut publisher = TcpStream::connect(&address).await.unwrap();
-    
+
     // Send CONNECT with Will
     let mut connect_packet = vec![
         0x10, // CONNECT packet type
         0x00, // Remaining length placeholder
     ];
-    
+
     // Variable header
     connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
     connect_packet.extend_from_slice(b"MQTT"); // Protocol name
     connect_packet.push(0x04); // Protocol level
     connect_packet.push(0x06); // Connect flags: Will flag=1, Clean session=1
     connect_packet.extend_from_slice(&[0x00, 0x0A]); // Keep-alive
-    
+
     // Payload
     connect_packet.extend_from_slice(&[0x00, 0x03]); // Client ID length
     connect_packet.extend_from_slice(b"pub"); // Client ID
@@ -981,11 +1000,11 @@ async fn test_will_message_not_sent_on_disconnect() {
     connect_packet.extend_from_slice(b"will/topic"); // Will topic
     connect_packet.extend_from_slice(&[0x00, 0x07]); // Will message length
     connect_packet.extend_from_slice(b"offline"); // Will message
-    
+
     // Update remaining length
     let remaining_len = connect_packet.len() - 2;
     connect_packet[1] = remaining_len as u8;
-    
+
     publisher.write_all(&connect_packet).await.unwrap();
     read_connack(&mut publisher).await;
 
@@ -993,7 +1012,7 @@ async fn test_will_message_not_sent_on_disconnect() {
     let mut subscriber = TcpStream::connect(&address).await.unwrap();
     send_connect(&mut subscriber, "sub").await;
     read_connack(&mut subscriber).await;
-    
+
     // Subscribe to Will topic
     let subscribe_packet = [
         0x82, // SUBSCRIBE
@@ -1004,7 +1023,7 @@ async fn test_will_message_not_sent_on_disconnect() {
         0x00, // QoS
     ];
     subscriber.write_all(&subscribe_packet).await.unwrap();
-    
+
     // Read SUBACK
     let mut suback = [0u8; 5];
     subscriber.read_exact(&mut suback).await.unwrap();
@@ -1012,7 +1031,7 @@ async fn test_will_message_not_sent_on_disconnect() {
     // Send DISCONNECT from publisher
     let disconnect = [0xE0, 0x00]; // DISCONNECT packet
     publisher.write_all(&disconnect).await.unwrap();
-    
+
     // Small delay
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -1026,6 +1045,7 @@ async fn test_will_message_not_sent_on_disconnect() {
     let _ = server.stop().await;
 }
 
+
 #[tokio::test]
 async fn test_will_message_on_keepalive_timeout() {
     init_test_logging();
@@ -1036,20 +1056,20 @@ async fn test_will_message_on_keepalive_timeout() {
 
     // Publisher with Will message and short keep-alive
     let mut publisher = TcpStream::connect(&address).await.unwrap();
-    
+
     // Send CONNECT with Will and 2-second keep-alive
     let mut connect_packet = vec![
         0x10, // CONNECT packet type
         0x00, // Remaining length placeholder
     ];
-    
+
     // Variable header
     connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
     connect_packet.extend_from_slice(b"MQTT"); // Protocol name
     connect_packet.push(0x04); // Protocol level
     connect_packet.push(0x06); // Connect flags: Will flag=1, Clean session=1
     connect_packet.extend_from_slice(&[0x00, 0x02]); // Keep-alive = 2 seconds
-    
+
     // Payload
     connect_packet.extend_from_slice(&[0x00, 0x03]); // Client ID length
     connect_packet.extend_from_slice(b"pub"); // Client ID
@@ -1057,11 +1077,11 @@ async fn test_will_message_on_keepalive_timeout() {
     connect_packet.extend_from_slice(b"will/timeout"); // Will topic
     connect_packet.extend_from_slice(&[0x00, 0x07]); // Will message length
     connect_packet.extend_from_slice(b"timeout"); // Will message
-    
+
     // Update remaining length
     let remaining_len = connect_packet.len() - 2;
     connect_packet[1] = remaining_len as u8;
-    
+
     publisher.write_all(&connect_packet).await.unwrap();
     read_connack(&mut publisher).await;
 
@@ -1069,7 +1089,7 @@ async fn test_will_message_on_keepalive_timeout() {
     let mut subscriber = TcpStream::connect(&address).await.unwrap();
     send_connect(&mut subscriber, "sub").await;
     read_connack(&mut subscriber).await;
-    
+
     // Subscribe to Will topic
     let subscribe_packet = [
         0x82, // SUBSCRIBE
@@ -1080,7 +1100,7 @@ async fn test_will_message_on_keepalive_timeout() {
         0x00, // QoS
     ];
     subscriber.write_all(&subscribe_packet).await.unwrap();
-    
+
     // Read SUBACK
     let mut suback = [0u8; 5];
     subscriber.read_exact(&mut suback).await.unwrap();
@@ -1092,20 +1112,21 @@ async fn test_will_message_on_keepalive_timeout() {
     let mut header = [0u8; 2];
     subscriber.read_exact(&mut header).await.unwrap();
     assert_eq!(header[0], 0x30); // PUBLISH without retain
-    
+
     let mut payload = vec![0u8; header[1] as usize];
     subscriber.read_exact(&mut payload).await.unwrap();
-    
+
     // Verify it's the Will message
     let topic_len = ((payload[0] as usize) << 8) | (payload[1] as usize);
     let topic = std::str::from_utf8(&payload[2..2+topic_len]).unwrap();
     assert_eq!(topic, "will/timeout");
-    
+
     let message = &payload[2+topic_len..];
     assert_eq!(message, b"timeout");
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_protocol_validation() {
@@ -1117,76 +1138,77 @@ async fn test_protocol_validation() {
 
     // Test 1: Invalid protocol name
     let mut client = TcpStream::connect(&address).await.unwrap();
-    
+
     let mut connect_packet = vec![
         0x10, // CONNECT packet type
         0x00, // Remaining length (will update)
     ];
-    
+
     // Variable header
     connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
     connect_packet.extend_from_slice(b"HTTP"); // Wrong protocol name
     connect_packet.push(0x04); // Protocol level
     connect_packet.push(0x02); // Connect flags: Clean session=1
     connect_packet.extend_from_slice(&[0x00, 0x3C]); // Keep-alive = 60
-    
+
     // Payload
     connect_packet.extend_from_slice(&[0x00, 0x04]); // Client ID length
     connect_packet.extend_from_slice(b"test"); // Client ID
-    
+
     // Update remaining length
     let remaining_len = connect_packet.len() - 2;
     connect_packet[1] = remaining_len as u8;
-    
+
     client.write_all(&connect_packet).await.unwrap();
-    
+
     // Should receive CONNACK with error code 0x01
     let mut connack = vec![0u8; 4];
     client.read_exact(&mut connack).await.unwrap();
     assert_eq!(connack[0], 0x20); // CONNACK
     assert_eq!(connack[3], 0x01); // UNACCEPTABLE_PROTOCOL_VERSION
-    
+
     // Connection should be closed
     let mut buf = [0u8; 1];
     assert!(client.read(&mut buf).await.unwrap() == 0);
 
     // Test 2: Invalid protocol level
     let mut client = TcpStream::connect(&address).await.unwrap();
-    
+
     let mut connect_packet = vec![
         0x10, // CONNECT packet type
         0x00, // Remaining length (will update)
     ];
-    
+
     // Variable header
     connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
     connect_packet.extend_from_slice(b"MQTT"); // Correct protocol name
     connect_packet.push(0x03); // Wrong protocol level (3 instead of 4)
     connect_packet.push(0x02); // Connect flags: Clean session=1
     connect_packet.extend_from_slice(&[0x00, 0x3C]); // Keep-alive = 60
-    
+
     // Payload
     connect_packet.extend_from_slice(&[0x00, 0x04]); // Client ID length
     connect_packet.extend_from_slice(b"test"); // Client ID
-    
+
     // Update remaining length
     let remaining_len = connect_packet.len() - 2;
     connect_packet[1] = remaining_len as u8;
-    
+
     client.write_all(&connect_packet).await.unwrap();
-    
+
     // Should receive CONNACK with error code 0x01
     let mut connack = vec![0u8; 4];
     client.read_exact(&mut connack).await.unwrap();
     assert_eq!(connack[0], 0x20); // CONNACK
     assert_eq!(connack[3], 0x01); // UNACCEPTABLE_PROTOCOL_VERSION
-    
+
     // Connection should be closed
     let mut buf = [0u8; 1];
     assert!(client.read(&mut buf).await.unwrap() == 0);
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_client_id_validation() {
@@ -1198,100 +1220,100 @@ async fn test_client_id_validation() {
 
     // Test 1: Client ID too long (more than 23 bytes)
     let mut client = TcpStream::connect(&address).await.unwrap();
-    
+
     let mut connect_packet = vec![
         0x10, // CONNECT packet type
         0x00, // Remaining length (will update)
     ];
-    
+
     // Variable header
     connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
     connect_packet.extend_from_slice(b"MQTT"); // Protocol name
     connect_packet.push(0x04); // Protocol level
     connect_packet.push(0x02); // Connect flags: Clean session=1
     connect_packet.extend_from_slice(&[0x00, 0x3C]); // Keep-alive = 60
-    
+
     // Payload with long client ID
     let long_client_id = "a".repeat(24); // 24 bytes, exceeds limit
     connect_packet.extend_from_slice(&[0x00, 0x18]); // Client ID length = 24
     connect_packet.extend_from_slice(long_client_id.as_bytes());
-    
+
     // Update remaining length
     let remaining_len = connect_packet.len() - 2;
     connect_packet[1] = remaining_len as u8;
-    
+
     client.write_all(&connect_packet).await.unwrap();
-    
+
     // Should receive CONNACK with error code 0x02
     let mut connack = vec![0u8; 4];
     client.read_exact(&mut connack).await.unwrap();
     assert_eq!(connack[0], 0x20); // CONNACK
     assert_eq!(connack[3], 0x02); // IDENTIFIER_REJECTED
-    
+
     // Connection should be closed
     let mut buf = [0u8; 1];
     assert!(client.read(&mut buf).await.unwrap() == 0);
 
     // Test 2: Client ID with invalid characters
     let mut client = TcpStream::connect(&address).await.unwrap();
-    
+
     let mut connect_packet = vec![
         0x10, // CONNECT packet type
         0x00, // Remaining length (will update)
     ];
-    
+
     // Variable header
     connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
     connect_packet.extend_from_slice(b"MQTT"); // Protocol name
     connect_packet.push(0x04); // Protocol level
     connect_packet.push(0x02); // Connect flags: Clean session=1
     connect_packet.extend_from_slice(&[0x00, 0x3C]); // Keep-alive = 60
-    
+
     // Payload with invalid client ID
     connect_packet.extend_from_slice(&[0x00, 0x07]); // Client ID length
     connect_packet.extend_from_slice(b"test-id"); // Contains hyphen (invalid)
-    
+
     // Update remaining length
     let remaining_len = connect_packet.len() - 2;
     connect_packet[1] = remaining_len as u8;
-    
+
     client.write_all(&connect_packet).await.unwrap();
-    
+
     // Should receive CONNACK with error code 0x02
     let mut connack = vec![0u8; 4];
     client.read_exact(&mut connack).await.unwrap();
     assert_eq!(connack[0], 0x20); // CONNACK
     assert_eq!(connack[3], 0x02); // IDENTIFIER_REJECTED
-    
+
     // Connection should be closed
     let mut buf = [0u8; 1];
     assert!(client.read(&mut buf).await.unwrap() == 0);
 
     // Test 3: Valid client ID should work
     let mut client = TcpStream::connect(&address).await.unwrap();
-    
+
     let mut connect_packet = vec![
         0x10, // CONNECT packet type
         0x00, // Remaining length (will update)
     ];
-    
+
     // Variable header
     connect_packet.extend_from_slice(&[0x00, 0x04]); // Protocol name length
     connect_packet.extend_from_slice(b"MQTT"); // Protocol name
     connect_packet.push(0x04); // Protocol level
     connect_packet.push(0x02); // Connect flags: Clean session=1
     connect_packet.extend_from_slice(&[0x00, 0x3C]); // Keep-alive = 60
-    
+
     // Payload with valid client ID
     connect_packet.extend_from_slice(&[0x00, 0x09]); // Client ID length
     connect_packet.extend_from_slice(b"Client123"); // Valid: alphanumeric only
-    
+
     // Update remaining length
     let remaining_len = connect_packet.len() - 2;
     connect_packet[1] = remaining_len as u8;
-    
+
     client.write_all(&connect_packet).await.unwrap();
-    
+
     // Should receive CONNACK with success
     let mut connack = vec![0u8; 4];
     client.read_exact(&mut connack).await.unwrap();
@@ -1300,6 +1322,7 @@ async fn test_client_id_validation() {
 
     let _ = server.stop().await;
 }
+
 
 #[tokio::test]
 async fn test_topic_validation() {
@@ -1319,30 +1342,30 @@ async fn test_topic_validation() {
         0x82, // SUBSCRIBE packet type with QoS=1
         0x00, // Remaining length (will update)
     ];
-    
+
     // Variable header
     subscribe_packet.extend_from_slice(&[0x00, 0x01]); // Packet ID
-    
+
     // Payload with invalid topic filter
     subscribe_packet.extend_from_slice(&[0x00, 0x07]); // Topic length
     subscribe_packet.extend_from_slice(b"test/+a"); // Invalid: + not alone in level
     subscribe_packet.push(0x00); // QoS 0
-    
+
     // Update remaining length
     let remaining_len = subscribe_packet.len() - 2;
     subscribe_packet[1] = remaining_len as u8;
-    
+
     client.write_all(&subscribe_packet).await.unwrap();
-    
+
     // Read SUBACK
     let mut header = [0u8; 2];
     client.read_exact(&mut header).await.unwrap();
     assert_eq!(header[0], 0x90); // SUBACK
-    
+
     let remaining_len = header[1] as usize;
     let mut payload = vec![0u8; remaining_len];
     client.read_exact(&mut payload).await.unwrap();
-    
+
     assert_eq!(payload[0], 0x00); // Packet ID MSB
     assert_eq!(payload[1], 0x01); // Packet ID LSB
     assert_eq!(payload[2], 0x80); // FAILURE
@@ -1352,33 +1375,117 @@ async fn test_topic_validation() {
         0x82, // SUBSCRIBE packet type with QoS=1
         0x00, // Remaining length (will update)
     ];
-    
+
     // Variable header
     subscribe_packet.extend_from_slice(&[0x00, 0x02]); // Packet ID
-    
+
     // Payload with invalid topic filter
     subscribe_packet.extend_from_slice(&[0x00, 0x08]); // Topic length
     subscribe_packet.extend_from_slice(b"test/#/a"); // Invalid: # not at end
     subscribe_packet.push(0x00); // QoS 0
-    
+
     // Update remaining length
     let remaining_len = subscribe_packet.len() - 2;
     subscribe_packet[1] = remaining_len as u8;
-    
+
     client.write_all(&subscribe_packet).await.unwrap();
-    
+
     // Read SUBACK
     let mut header = [0u8; 2];
     client.read_exact(&mut header).await.unwrap();
     assert_eq!(header[0], 0x90); // SUBACK
-    
+
     let remaining_len = header[1] as usize;
     let mut payload = vec![0u8; remaining_len];
     client.read_exact(&mut payload).await.unwrap();
-    
+
     assert_eq!(payload[0], 0x00); // Packet ID MSB
     assert_eq!(payload[1], 0x02); // Packet ID LSB
     assert_eq!(payload[2], 0x80); // FAILURE
 
     let _ = server.stop().await;
 }
+
+
+#[tokio::test]
+async fn test_qos1_publish_puback() {
+    init_test_logging();
+    // Start server
+    let mut config = iotd::config::Config::default();
+    config.server.address = "127.0.0.1:0".to_string();
+    let server = iotd::server::start(config).await.unwrap();
+    let address = server.address().await.unwrap();
+
+    // Connect publisher
+    let mut pub_stream = TcpStream::connect(&address).await.unwrap();
+
+    // Send CONNECT packet for publisher
+    let connect_packet = [
+        0x10, // CONNECT packet type
+        0x12, // Remaining length = 18
+        0x00, 0x04, // Protocol name length
+        b'M', b'Q', b'T', b'T', // Protocol name "MQTT"
+        0x04, // Protocol level (3.1.1)
+        0x02, // Connect flags (clean session)
+        0x00, 0x3C, // Keep alive = 60 seconds
+        0x00, 0x06, // Client ID length
+        b'q', b'o', b's', b'p', b'u', b'b', // Client ID "qospub"
+    ];
+
+    pub_stream.write_all(&connect_packet).await.unwrap();
+    pub_stream.flush().await.unwrap();
+
+    // Read CONNACK for publisher
+    let mut response = [0u8; 4];
+    pub_stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response[0], 0x20); // CONNACK packet type
+    assert_eq!(response[3], 0x00); // Return code: accepted
+
+    // Small delay to ensure connection is established
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    // First test PINGREQ to ensure session is working
+    let pingreq_packet = [0xC0, 0x00]; // PINGREQ
+    pub_stream.write_all(&pingreq_packet).await.unwrap();
+    pub_stream.flush().await.unwrap();
+
+    // Read PINGRESP
+    let mut pingresp = [0u8; 2];
+    let result = timeout(Duration::from_secs(1), pub_stream.read_exact(&mut pingresp)).await;
+    assert!(result.is_ok(), "Timeout waiting for PINGRESP");
+    result.unwrap().unwrap();
+    assert_eq!(pingresp[0], 0xD0); // PINGRESP packet type
+    assert_eq!(pingresp[1], 0x00); // Remaining length
+
+    // Now send PUBLISH with QoS=1
+    let publish_packet = [
+        0x32, // PUBLISH packet type with QoS=1 (0x30 | 0x02)
+        0x10, // Remaining length = 16
+        0x00, 0x05, // Topic length
+        b't', b'e', b's', b't', b'/', // Topic "test/"
+        0x00, 0x42, // Packet ID = 66
+        b'h', b'e', b'l', b'l', b'o', // Payload "hello"
+    ];
+
+    pub_stream.write_all(&publish_packet).await.unwrap();
+    pub_stream.flush().await.unwrap();
+
+    // Read PUBACK
+    let mut puback = [0u8; 4];
+    let result = timeout(Duration::from_secs(2), pub_stream.read_exact(&mut puback)).await;
+
+    assert!(result.is_ok(), "Timeout waiting for PUBACK");
+    result.unwrap().unwrap(); // This just ensures no error
+
+    assert_eq!(puback[0], 0x40); // PUBACK packet type
+    assert_eq!(puback[1], 0x02); // Remaining length
+    assert_eq!(puback[2], 0x00); // Packet ID MSB
+    assert_eq!(puback[3], 0x42); // Packet ID LSB = 66
+
+    // Send DISCONNECT
+    let disconnect_packet = [0xE0, 0x00];
+    pub_stream.write_all(&disconnect_packet).await.unwrap();
+
+    let _ = server.stop().await;
+}
+
