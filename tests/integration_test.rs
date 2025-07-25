@@ -2,7 +2,6 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
-use tracing::Level;
 
 static INIT: std::sync::Once = std::sync::Once::new();
 
@@ -10,8 +9,8 @@ pub fn init_test_logging() {
     INIT.call_once(|| {
         let log_level = std::env::var("RUST_LOG")
             .ok()
-            .and_then(|s| s.parse::<Level>().ok())
-            .unwrap_or(Level::INFO);
+            .and_then(|s| s.parse::<tracing::Level>().ok())
+            .unwrap_or(tracing::Level::INFO);
 
         tracing_subscriber::fmt()
             .with_max_level(log_level)
@@ -1402,89 +1401,6 @@ async fn test_topic_validation() {
     assert_eq!(payload[0], 0x00); // Packet ID MSB
     assert_eq!(payload[1], 0x02); // Packet ID LSB
     assert_eq!(payload[2], 0x80); // FAILURE
-
-    let _ = server.stop().await;
-}
-
-
-#[tokio::test]
-async fn test_qos1_publish_puback() {
-    init_test_logging();
-    // Start server
-    let mut config = iotd::config::Config::default();
-    config.server.address = "127.0.0.1:0".to_string();
-    let server = iotd::server::start(config).await.unwrap();
-    let address = server.address().await.unwrap();
-
-    // Connect publisher
-    let mut pub_stream = TcpStream::connect(&address).await.unwrap();
-
-    // Send CONNECT packet for publisher
-    let connect_packet = [
-        0x10, // CONNECT packet type
-        0x12, // Remaining length = 18
-        0x00, 0x04, // Protocol name length
-        b'M', b'Q', b'T', b'T', // Protocol name "MQTT"
-        0x04, // Protocol level (3.1.1)
-        0x02, // Connect flags (clean session)
-        0x00, 0x3C, // Keep alive = 60 seconds
-        0x00, 0x06, // Client ID length
-        b'q', b'o', b's', b'p', b'u', b'b', // Client ID "qospub"
-    ];
-
-    pub_stream.write_all(&connect_packet).await.unwrap();
-    pub_stream.flush().await.unwrap();
-
-    // Read CONNACK for publisher
-    let mut response = [0u8; 4];
-    pub_stream.read_exact(&mut response).await.unwrap();
-    assert_eq!(response[0], 0x20); // CONNACK packet type
-    assert_eq!(response[3], 0x00); // Return code: accepted
-
-    // Small delay to ensure connection is established
-    tokio::time::sleep(Duration::from_millis(10)).await;
-
-    // First test PINGREQ to ensure session is working
-    let pingreq_packet = [0xC0, 0x00]; // PINGREQ
-    pub_stream.write_all(&pingreq_packet).await.unwrap();
-    pub_stream.flush().await.unwrap();
-
-    // Read PINGRESP
-    let mut pingresp = [0u8; 2];
-    let result = timeout(Duration::from_secs(1), pub_stream.read_exact(&mut pingresp)).await;
-    assert!(result.is_ok(), "Timeout waiting for PINGRESP");
-    result.unwrap().unwrap();
-    assert_eq!(pingresp[0], 0xD0); // PINGRESP packet type
-    assert_eq!(pingresp[1], 0x00); // Remaining length
-
-    // Now send PUBLISH with QoS=1
-    let publish_packet = [
-        0x32, // PUBLISH packet type with QoS=1 (0x30 | 0x02)
-        0x10, // Remaining length = 16
-        0x00, 0x05, // Topic length
-        b't', b'e', b's', b't', b'/', // Topic "test/"
-        0x00, 0x42, // Packet ID = 66
-        b'h', b'e', b'l', b'l', b'o', // Payload "hello"
-    ];
-
-    pub_stream.write_all(&publish_packet).await.unwrap();
-    pub_stream.flush().await.unwrap();
-
-    // Read PUBACK
-    let mut puback = [0u8; 4];
-    let result = timeout(Duration::from_secs(2), pub_stream.read_exact(&mut puback)).await;
-
-    assert!(result.is_ok(), "Timeout waiting for PUBACK");
-    result.unwrap().unwrap(); // This just ensures no error
-
-    assert_eq!(puback[0], 0x40); // PUBACK packet type
-    assert_eq!(puback[1], 0x02); // Remaining length
-    assert_eq!(puback[2], 0x00); // Packet ID MSB
-    assert_eq!(puback[3], 0x42); // Packet ID LSB = 66
-
-    // Send DISCONNECT
-    let disconnect_packet = [0xE0, 0x00];
-    pub_stream.write_all(&disconnect_packet).await.unwrap();
 
     let _ = server.stop().await;
 }

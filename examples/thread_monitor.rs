@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::collections::HashMap;
-use std::thread;
 use tokio::time::{sleep, Duration};
 
 static THREAD_COUNTER: AtomicUsize = AtomicUsize::new(0);

@@ -7,8 +7,8 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 struct RouterInternal {
-    // FILTER -> (SESSION_ID -> SENDER)
-    filters: HashMap<String, HashMap<String, Mailbox>>,
+    // FILTER -> (SESSION_ID -> (SENDER, QoS))
+    filters: HashMap<String, HashMap<String, (Mailbox, QoS)>>,
     // SESSION_ID -> FILTER
     sessions: HashMap<String, HashSet<String>>,
     // TOPIC -> RETAINED MESSAGE
@@ -97,23 +97,42 @@ impl Router {
                     continue;
                 }
 
-                // Store filters -> (session_id -> sender)
+                // Store filters -> (session_id -> (sender, qos))
                 router.filters.entry(filter.0.to_string()).or_insert(HashMap::new())
-                    .insert(session_id.to_owned(), sender.clone());
+                    .insert(session_id.to_owned(), (sender.clone(), filter.1));
                 // Store session_id -> filter
                 router.sessions.entry(session_id.to_owned()).or_insert(HashSet::new())
                     .insert(filter.0.to_owned());
-                return_codes.push(MAXIMUM_QOS_0);
-                info!("SUBSCRIBE session_id: {}, filter: {}", session_id, filter.0);
+                
+                // Grant the requested QoS level (server supports QoS 0 and 1)
+                let granted_qos = match filter.1 {
+                    QoS::AtMostOnce => MAXIMUM_QOS_0,     // 0x00
+                    QoS::AtLeastOnce => 0x01,             // Grant QoS 1
+                    QoS::ExactlyOnce => 0x01,             // Downgrade QoS 2 to 1 (not supported yet)
+                };
+                return_codes.push(granted_qos);
+                info!("SUBSCRIBE session_id: {}, filter: {}, granted_qos: {}", session_id, filter.0, granted_qos);
                 
                 // Find retained messages matching this subscription
                 for (topic, retained_packet) in router.retained_messages.iter() {
                     if Self::topic_matches(topic, &filter.0) {
+                        // Apply QoS downgrade for retained messages too
+                        let effective_qos = match (retained_packet.qos, filter.1) {
+                            (QoS::AtMostOnce, _) => QoS::AtMostOnce,
+                            (_, QoS::AtMostOnce) => QoS::AtMostOnce,
+                            (QoS::AtLeastOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
+                            (QoS::AtLeastOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce,
+                            (QoS::ExactlyOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
+                            (QoS::ExactlyOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce, // We don't support QoS=2 yet
+                        };
+                        
                         let mut packet = retained_packet.clone();
                         // Retained messages should be sent with retain flag set to true
                         packet.retain = true;
+                        packet.qos = effective_qos;
                         retained_to_send.push(packet);
-                        info!("Found retained message for topic {} matching filter {}", topic, filter.0);
+                        info!("Found retained message for topic {} matching filter {}, downgraded QoS from {:?} to {:?}", 
+                              topic, filter.0, retained_packet.qos, effective_qos);
                     }
                 }
             }
@@ -183,22 +202,35 @@ impl Router {
 
         // Route to current subscribers
         let router = self.data.read().await;
-        
-        // Create a packet for forwarding (retain flag should be false when forwarding)
-        let forward_packet = PublishPacket {
-            topic: packet.topic.clone(),
-            packet_id: packet.packet_id,
-            payload: packet.payload.clone(),
-            qos: packet.qos,
-            retain: false,  // Always false when forwarding to existing subscribers
-            dup: packet.dup,
-        };
 
         for (filter, sessions) in router.filters.iter() {
             if Self::topic_matches(&packet.topic, filter) {
-                for (session_id, sender) in sessions.iter() {
-                    info!("ROUTE topic:{} session_id:{}", packet.topic, session_id);
-                    sender.send(Packet::Publish(forward_packet.clone())).await.unwrap_or_else(|e| {
+                for (session_id, (sender, subscription_qos)) in sessions.iter() {
+                    // Apply QoS downgrade: use minimum of publisher QoS and subscription QoS
+                    let effective_qos = match (packet.qos, subscription_qos) {
+                        (QoS::AtMostOnce, _) => QoS::AtMostOnce,
+                        (_, QoS::AtMostOnce) => QoS::AtMostOnce,
+                        (QoS::AtLeastOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
+                        (QoS::AtLeastOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce,
+                        (QoS::ExactlyOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
+                        (QoS::ExactlyOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce, // We don't support QoS=2 yet
+                    };
+                    
+                    // Create a packet for forwarding with appropriate QoS
+                    // - Retain flag should be false when forwarding to existing subscribers
+                    // - Packet ID should be None - each session will assign its own
+                    let forward_packet = PublishPacket {
+                        topic: packet.topic.clone(),
+                        packet_id: None,  // Session will assign its own packet ID for QoS > 0
+                        payload: packet.payload.clone(),
+                        qos: effective_qos,
+                        retain: false,  // Always false when forwarding to existing subscribers
+                        dup: false,  // Not a duplicate when initially forwarding
+                    };
+                    
+                    info!("ROUTE topic:{} session_id:{} pub_qos:{:?} sub_qos:{:?} effective_qos:{:?}", 
+                          packet.topic, session_id, packet.qos, subscription_qos, effective_qos);
+                    sender.send(Packet::Publish(forward_packet)).await.unwrap_or_else(|e| {
                         info!("Route topic {} to session {} error: {}", packet.topic, session_id, e);
                     });
                 }

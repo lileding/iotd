@@ -4,47 +4,21 @@ use std::time::Duration;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
-    pub auth: AuthConfig,
-    pub storage: StorageConfig,
-    pub logging: LoggingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub address: String,
-    pub max_connections: usize,
-    pub session_timeout_secs: u64,
-    pub keep_alive_timeout_secs: u64,
-    pub max_packet_size: usize,
     pub retained_message_limit: usize,
+    pub max_retransmission_limit: u32,
+    pub retransmission_interval_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthConfig {
-    pub enabled: bool,
-    pub backend: String,
-    pub config: toml::Table,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StorageConfig {
-    pub backend: String,
-    pub config: toml::Table,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoggingConfig {
-    pub level: String,
-    pub format: String,
-}
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             server: ServerConfig::default(),
-            auth: AuthConfig::default(),
-            storage: StorageConfig::default(),
-            logging: LoggingConfig::default(),
         }
     }
 }
@@ -53,59 +27,22 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             address: "127.0.0.1:1883".to_string(),
-            max_connections: 10000,
-            session_timeout_secs: 300,
-            keep_alive_timeout_secs: 60,
-            max_packet_size: 1024 * 1024, // 1MB
             retained_message_limit: 10000,
+            max_retransmission_limit: 10,
+            retransmission_interval_ms: 5000, // 5 seconds
         }
     }
 }
 
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            backend: "none".to_string(),
-            config: toml::Table::new(),
-        }
-    }
-}
-
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            backend: "memory".to_string(),
-            config: toml::Table::new(),
-        }
-    }
-}
-
-impl Default for LoggingConfig {
-    fn default() -> Self {
-        Self {
-            level: "info".to_string(),
-            format: "text".to_string(),
-        }
-    }
-}
 
 impl Config {
-    pub fn session_timeout(&self) -> Duration {
-        Duration::from_secs(self.server.session_timeout_secs)
-    }
-
-    pub fn keep_alive_timeout(&self) -> Duration {
-        Duration::from_secs(self.server.keep_alive_timeout_secs)
+    pub fn retransmission_interval(&self) -> Duration {
+        Duration::from_millis(self.server.retransmission_interval_ms)
     }
 }
 
 impl ServerConfig {
-    pub fn session_timeout(&self) -> Duration {
-        Duration::from_secs(self.session_timeout_secs)
-    }
-
-    pub fn keep_alive_timeout(&self) -> Duration {
-        Duration::from_secs(self.keep_alive_timeout_secs)
+    pub fn retransmission_interval(&self) -> Duration {
+        Duration::from_millis(self.retransmission_interval_ms)
     }
 }

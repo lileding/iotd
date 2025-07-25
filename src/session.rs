@@ -3,12 +3,12 @@ use crate::{
     protocol::packet, protocol::v3,
     transport::AsyncStream,
 };
-use std::{pin::Pin, future::Future, sync::Arc};
+use std::{pin::Pin, future::Future, sync::Arc, collections::HashMap};
 use tokio::{
     io::AsyncWriteExt,
     sync::mpsc,
     task::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tracing::{debug, info, error};
 use uuid::Uuid;
@@ -33,6 +33,15 @@ struct Runtime {
     clean_session: bool,
     keep_alive: u16,
     will_message: Option<WillMessage>,
+    next_packet_id: u16,  // For generating packet IDs for outgoing QoS > 0 messages
+    inflight_messages: HashMap<u16, InflightMessage>,  // Track unacknowledged QoS=1 messages
+}
+
+#[derive(Debug, Clone)]
+struct InflightMessage {
+    packet: packet::PublishPacket,
+    timestamp: Instant,
+    retry_count: u32,
 }
 
 pub type Mailbox = mpsc::Sender<packet::Packet>;
@@ -93,6 +102,8 @@ impl Session {
                     clean_session: true,
                     keep_alive: 0,
                     will_message: None,
+                    next_packet_id: 1,  // Start from 1, 0 is reserved
+                    inflight_messages: HashMap::new(),
                 };
 
                 runtime.run().await;
@@ -128,6 +139,16 @@ impl Session {
 }
 
 impl Runtime {
+    fn next_packet_id(&mut self) -> u16 {
+        let id = self.next_packet_id;
+        self.next_packet_id = if self.next_packet_id == 65535 {
+            1  // Wrap around, skipping 0
+        } else {
+            self.next_packet_id + 1
+        };
+        id
+    }
+
     async fn run(&mut self) {
         let mut state = State::WaitConnect;
         loop {
@@ -205,6 +226,22 @@ impl Runtime {
         // Skip the first tick since interval fires immediately on creation
         keep_alive_interval.tick().await;
 
+        // Retransmission timer for QoS=1 messages
+        let retransmission_interval_ms = self.broker.config().server.retransmission_interval_ms;
+        let retransmission_enabled = retransmission_interval_ms > 0;
+        
+        // Use a large interval if retransmission is disabled to avoid unnecessary timer overhead
+        let timer_interval = if retransmission_enabled {
+            Duration::from_millis(retransmission_interval_ms)
+        } else {
+            Duration::from_secs(3600 * 24) // 24 hours - effectively disabled
+        };
+        
+        let mut retransmit_interval = tokio::time::interval(timer_interval);
+        retransmit_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Skip the first tick
+        retransmit_interval.tick().await;
+
         loop {
             tokio::select! {
                 pack = packet::Packet::decode(&mut reader) => {
@@ -230,7 +267,29 @@ impl Runtime {
                     }
                 }
 
-                Some(message) = self.message_rx.recv() => {
+                Some(mut message) = self.message_rx.recv() => {
+                    // Assign packet ID for outgoing QoS > 0 PUBLISH messages
+                    if let packet::Packet::Publish(ref mut pub_packet) = message {
+                        if pub_packet.qos != packet::QoS::AtMostOnce && pub_packet.packet_id.is_none() {
+                            let packet_id = self.next_packet_id();
+                            pub_packet.packet_id = Some(packet_id);
+                            debug!("Assigned packet_id={} for outgoing PUBLISH to session {}", 
+                                  packet_id, self.id);
+                            
+                            // Track QoS=1 messages for acknowledgment
+                            if pub_packet.qos == packet::QoS::AtLeastOnce {
+                                let inflight = InflightMessage {
+                                    packet: pub_packet.clone(),
+                                    timestamp: Instant::now(),
+                                    retry_count: 0,
+                                };
+                                self.inflight_messages.insert(packet_id, inflight);
+                                debug!("Tracking QoS=1 message with packet_id={}, total inflight: {}", 
+                                      packet_id, self.inflight_messages.len());
+                            }
+                        }
+                    }
+                    
                     let mut buf = bytes::BytesMut::new();
                     message.encode(&mut buf);
                     if let Err(e) = writer.write_all(&buf).await {
@@ -280,6 +339,59 @@ impl Runtime {
                         break;
                     }
                     // If keep_alive_secs == 0, this tick is ignored (infinite timeout)
+                }
+
+                _ = retransmit_interval.tick() => {
+                    // Skip retransmission if disabled (interval = 0)
+                    let retransmission_interval_ms = self.broker.config().server.retransmission_interval_ms;
+                    if retransmission_interval_ms == 0 {
+                        continue;
+                    }
+                    
+                    // Retransmit all unacknowledged QoS=1 messages
+                    let now = Instant::now();
+                    let mut retransmit_packets = Vec::new();
+                    let mut packets_to_remove = Vec::new();
+                    let max_retransmission_limit = self.broker.config().server.max_retransmission_limit;
+                    
+                    for (packet_id, inflight) in self.inflight_messages.iter() {
+                        // Check if we've exceeded max retransmission limit
+                        if inflight.retry_count >= max_retransmission_limit {
+                            info!("Message packet_id={} exceeded max retransmission limit ({}), dropping", 
+                                  packet_id, max_retransmission_limit);
+                            packets_to_remove.push(*packet_id);
+                            continue;
+                        }
+                        
+                        // Only retransmit messages older than half the retransmission interval
+                        if now.duration_since(inflight.timestamp) > Duration::from_millis(retransmission_interval_ms / 2) {
+                            let mut packet = inflight.packet.clone();
+                            packet.dup = true;  // Set DUP flag for retransmission
+                            retransmit_packets.push((*packet_id, packet));
+                        }
+                    }
+                    
+                    // Remove packets that exceeded retry limit
+                    for packet_id in packets_to_remove {
+                        self.inflight_messages.remove(&packet_id);
+                    }
+                    
+                    // Send retransmitted messages
+                    for (packet_id, packet) in retransmit_packets {
+                        debug!("Retransmitting QoS=1 message with packet_id={} for session {}", 
+                              packet_id, self.id);
+                        if let Err(e) = self.message_tx.send(packet::Packet::Publish(packet)).await {
+                            error!("Failed to send retransmitted message: {}", e);
+                        }
+                        
+                        // Update timestamp for this retransmission
+                        if let Some(inflight) = self.inflight_messages.get_mut(&packet_id) {
+                            inflight.timestamp = now;
+                            inflight.retry_count += 1;
+                            info!("Retransmitted message packet_id={}, retry_count={}/{}", 
+                                  packet_id, inflight.retry_count, max_retransmission_limit);
+                        }
+                    }
                 }
             }
         }
@@ -456,21 +568,36 @@ impl Runtime {
 
     async fn on_puback(&mut self, packet: packet::PubAckPacket) -> Result<bool> {
         info!("PUBACK received for session {}: packet_id={}", self.id, packet.packet_id);
-        // TODO: In Milestone 2, this will acknowledge outgoing QoS=1 messages
+        
+        // Remove the acknowledged message from inflight tracking
+        if let Some(inflight) = self.inflight_messages.remove(&packet.packet_id) {
+            let elapsed = inflight.timestamp.elapsed();
+            info!("QoS=1 message acknowledged: packet_id={}, elapsed={:?}, remaining inflight: {}", 
+                  packet.packet_id, elapsed, self.inflight_messages.len());
+        } else {
+            debug!("Received PUBACK for unknown packet_id={}", packet.packet_id);
+        }
+        
         Ok(true)
     }
 
     async fn on_publish(&mut self, packet: packet::PublishPacket) -> Result<bool> {
-        info!("PUBLISH received for session {}: topic={}, qos={:?}, retain={}", 
-            self.id, packet.topic, packet.qos, packet.retain);
+        info!("PUBLISH received for session {}: topic={}, qos={:?}, retain={}, dup={}", 
+            self.id, packet.topic, packet.qos, packet.retain, packet.dup);
 
         // Handle QoS=1: Send PUBACK if required
         if packet.qos == packet::QoS::AtLeastOnce {
             if let Some(packet_id) = packet.packet_id {
-                // Send PUBACK for QoS=1
+                // Always send PUBACK for QoS=1 (even for duplicates)
                 let puback = packet::PubAckPacket { packet_id };
                 self.message_tx.send(packet::Packet::PubAck(puback)).await?;
                 info!("Sent PUBACK for packet_id={} to session {}", packet_id, self.id);
+                
+                // Check DUP flag - if it's a duplicate, don't route
+                if packet.dup {
+                    info!("Received duplicate PUBLISH with packet_id={}, not routing", packet_id);
+                    return Ok(true); // Still return success, just don't route
+                }
             } else {
                 // QoS=1 requires packet_id
                 error!("QoS=1 PUBLISH missing packet_id from session {}", self.id);
@@ -478,7 +605,7 @@ impl Runtime {
             }
         }
 
-        // Route the message through the router
+        // Route the message through the router (only for non-duplicates or QoS=0)
         self.broker.route(packet).await;
 
         Ok(true)

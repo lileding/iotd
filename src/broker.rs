@@ -2,6 +2,7 @@ use crate::protocol::packet::{QoS, PublishPacket};
 use crate::session::{Mailbox, Session, TakeoverAction};
 use crate::router::Router;
 use crate::transport::AsyncStream;
+use crate::config::Config;
 use dashmap::{DashMap, mapref::entry::Entry};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -12,14 +13,17 @@ pub struct Broker {
     sessions: Mutex<HashMap<String, Session>>,
     named_clients: DashMap<String, TakeoverAction>,
     router: Router,
+    config: Config,
 }
 
 impl Broker {
-    pub fn new(retained_message_limit: usize) -> Arc<Self> {
+    pub fn new(config: Config) -> Arc<Self> {
+        let retained_message_limit = config.server.retained_message_limit;
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
             named_clients: DashMap::new(),
             router: Router::new(retained_message_limit),
+            config,
         })
     }
 
@@ -34,6 +38,10 @@ impl Broker {
 
         info!("Added session {} to broker", session.id());
         sessions.insert(session.id().to_owned(), session);
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     pub async fn clean_all_sessions(&self) {
