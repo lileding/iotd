@@ -20,13 +20,13 @@ fn main() {
     
     let is_dirty = !status_output.stdout.is_empty();
     let git_revision = if is_dirty {
-        format!("{}-dirty", git_hash)
+        format!("{git_hash}-dirty")
     } else {
         git_hash
     };
     
     // Set the GIT_REVISION environment variable for use in the code
-    println!("cargo:rustc-env=GIT_REVISION={}", git_revision);
+    println!("cargo:rustc-env=GIT_REVISION={git_revision}");
     
     // Rerun if .git directory changes
     println!("cargo:rerun-if-changed=.git/HEAD");

@@ -66,11 +66,10 @@ impl Router {
         let levels: Vec<&str> = filter.split('/').collect();
         for (i, level) in levels.iter().enumerate() {
             // Multi-level wildcard # must be last character
-            if level.contains('#') {
-                if *level != "#" || i != levels.len() - 1 {
+            if level.contains('#')
+                && (*level != "#" || i != levels.len() - 1) {
                     return false;
                 }
-            }
             // Single-level wildcard + must be whole level
             if level.contains('+') && *level != "+" {
                 return false;
@@ -80,7 +79,7 @@ impl Router {
         true
     }
 
-    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &Vec<(String, QoS)>) -> (Vec<u8>, Vec<PublishPacket>) {
+    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &[(String, QoS)]) -> (Vec<u8>, Vec<PublishPacket>) {
         info!("Session {} subscribing to {} topics", session_id, topic_filters.len());
 
         let mut return_codes = Vec::new();
@@ -141,7 +140,7 @@ impl Router {
         (return_codes, retained_to_send)
     }
 
-    pub async fn unsubscribe(&self, session_id: &str, topic_filters: &Vec<String>) {
+    pub async fn unsubscribe(&self, session_id: &str, topic_filters: &[String]) {
         info!("Session {} unsubscribing to {} topics", session_id, topic_filters.len());
         let mut router = self.data.write().await;
 
@@ -456,7 +455,7 @@ mod tests {
     #[test]
     fn test_stress_patterns() {
         // Deeply nested topics
-        let deep_topic = (0..50).map(|i| format!("level{}", i)).collect::<Vec<_>>().join("/");
+        let deep_topic = (0..50).map(|i| format!("level{i}")).collect::<Vec<_>>().join("/");
         let deep_plus_filter = (0..50).map(|_| "+").collect::<Vec<_>>().join("/");
         assert!(Router::topic_matches(&deep_topic, &deep_plus_filter));
         assert!(Router::topic_matches(&deep_topic, "#"));

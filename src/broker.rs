@@ -56,8 +56,7 @@ impl Broker {
 
         info!("Begin clear sessions");
 
-        let mut handles = Vec::new();
-        handles.reserve(old_sessions.len());
+        let mut handles = Vec::with_capacity(old_sessions.len());
         for (_, session) in old_sessions {
             handles.push(session.cancel().await);
         }
@@ -93,11 +92,11 @@ impl Broker {
         info!("Removed session {} from broker", session_id.as_ref());
     }
 
-    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &Vec<(String, QoS)>) -> (Vec<u8>, Vec<PublishPacket>) {
+    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &[(String, QoS)]) -> (Vec<u8>, Vec<PublishPacket>) {
         self.router.subscribe(session_id, sender, topic_filters).await
     }
 
-    pub async fn unsubscribe(&self, session_id: &str, topic_filters: &Vec<String>) {
+    pub async fn unsubscribe(&self, session_id: &str, topic_filters: &[String]) {
         self.router.unsubscribe(session_id, topic_filters).await
     }
 

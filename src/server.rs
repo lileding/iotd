@@ -59,11 +59,11 @@ impl Server {
 
         // Bind the listener directly to the address
         let listener = TcpAsyncListener::bind(&self.config.server.address).await
-            .map_err(|e| ServerError::StartupFailed(format!("Failed to bind to {}: {}", self.config.server.address, e)))?;
+            .map_err(|e| ServerError::StartupFailed(format!("Failed to bind to {}: {e}", self.config.server.address)))?;
 
         // Get the actual bound address (useful for port 0)
         let bound_addr = listener.local_addr().await
-            .map_err(|e| ServerError::StartupFailed(format!("Failed to get local address: {}", e)))?;
+            .map_err(|e| ServerError::StartupFailed(format!("Failed to get local address: {e}")))?;
         
         *self.address.write().await = Some(bound_addr.to_string());
 
@@ -97,7 +97,7 @@ impl Server {
         // Wait for the server task to complete
         if let Some(handle) = self.server_handle.lock().await.take() {
             handle.await.unwrap_or_else(|e| {
-                error!("Error in waiting for server task {}", e);
+                error!("Error in waiting for server task {e}");
             });
         }
 
@@ -133,7 +133,7 @@ impl Server {
                             broker.add_client(stream).await;
                         }
                         Err(e) => {
-                            error!("Failed to accept connection: {}", e);
+                            error!("Failed to accept connection: {e}");
                         }
                     }
                 }
@@ -148,7 +148,7 @@ impl Server {
 
         // Close the listener to prevent new connections
         if let Err(e) = listener.close().await {
-            error!("Failed to close listener: {}", e);
+            error!("Failed to close listener: {e}");
         }
 
         info!("Server loop completed");

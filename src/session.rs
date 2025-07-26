@@ -503,46 +503,40 @@ impl Runtime {
 
 
     async fn on_message<W: AsyncWrite + Unpin>(&mut self, message: packet::Packet, writer: &mut W) -> Result<()> {
-        match message {
-            // Handle PUBLISH packets
-            packet::Packet::Publish(mut pub_packet) => {
-                if pub_packet.qos == packet::QoS::AtMostOnce {
-                    // QoS=0: Just send it
+        if let packet::Packet::Publish(mut pub_packet) = message {
+            if pub_packet.qos == packet::QoS::AtMostOnce {
+                // QoS=0: Just send it
+                let mut buf = BytesMut::new();
+                packet::Packet::Publish(pub_packet).encode(&mut buf);
+                writer.write_all(&buf).await?;
+            } else if pub_packet.qos == packet::QoS::AtLeastOnce {
+                if !pub_packet.dup {
+                    // QoS=1 without DUP: Assign packet ID and track it
+                    let packet_id = self.next_packet_id();
+                    pub_packet.packet_id = Some(packet_id);
+                    
+                    debug!("Sending new QoS=1 message with packet_id={packet_id}");
+                    
+                    // Send it immediately
+                    let mut buf = BytesMut::new();
+                    packet::Packet::Publish(pub_packet.clone()).encode(&mut buf);
+                    writer.write_all(&buf).await?;
+                    
+                    // Add to in-flight queue with DUP flag for retransmission
+                    pub_packet.dup = true;
+                    let inflight = InflightMessage {
+                        packet: pub_packet,
+                        timestamp: Instant::now(),
+                        retry_count: 0,
+                    };
+                    self.qos1_queue.push_back(inflight);
+                } else {
+                    // QoS=1 with DUP: Just send it
                     let mut buf = BytesMut::new();
                     packet::Packet::Publish(pub_packet).encode(&mut buf);
                     writer.write_all(&buf).await?;
-                } else if pub_packet.qos == packet::QoS::AtLeastOnce {
-                    if !pub_packet.dup {
-                        // QoS=1 without DUP: Assign packet ID and track it
-                        let packet_id = self.next_packet_id();
-                        pub_packet.packet_id = Some(packet_id);
-                        
-                        debug!("Sending new QoS=1 message with packet_id={}", packet_id);
-                        
-                        // Send it immediately
-                        let mut buf = BytesMut::new();
-                        packet::Packet::Publish(pub_packet.clone()).encode(&mut buf);
-                        writer.write_all(&buf).await?;
-                        
-                        // Add to in-flight queue with DUP flag for retransmission
-                        pub_packet.dup = true;
-                        let inflight = InflightMessage {
-                            packet: pub_packet,
-                            timestamp: Instant::now(),
-                            retry_count: 0,
-                        };
-                        self.qos1_queue.push_back(inflight);
-                    } else {
-                        // QoS=1 with DUP: Just send it
-                        let mut buf = BytesMut::new();
-                        packet::Packet::Publish(pub_packet).encode(&mut buf);
-                        writer.write_all(&buf).await?;
-                    }
                 }
             }
-
-            // Ignore other packet types
-            _ => {}
         }
         Ok(())
     }

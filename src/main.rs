@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use iotd::config::Config;
 use tokio::signal;
 use tracing::{info, Level};
-use tracing_subscriber;
 use std::fs;
 
 // Version information
@@ -10,7 +9,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const GIT_REVISION: &str = env!("GIT_REVISION");
 
 fn print_version() {
-    println!("iotd {}-{}", VERSION, GIT_REVISION);
+    println!("iotd {VERSION}-{GIT_REVISION}");
 }
 
 fn print_help() {
@@ -75,7 +74,7 @@ async fn main() -> Result<()> {
                 }
             }
             arg => {
-                eprintln!("Error: Unknown argument '{}'", arg);
+                eprintln!("Error: Unknown argument '{arg}'");
                 print_help();
                 return Ok(());
             }
@@ -99,9 +98,9 @@ async fn main() -> Result<()> {
     let mut config = if let Some(config_path) = config_file {
         info!("Loading configuration from: {}", config_path);
         let contents = fs::read_to_string(&config_path)
-            .with_context(|| format!("Failed to read config file: {}", config_path))?;
+            .with_context(|| format!("Failed to read config file: {config_path}"))?;
         toml::from_str(&contents)
-            .with_context(|| format!("Failed to parse config file: {}", config_path))?
+            .with_context(|| format!("Failed to parse config file: {config_path}"))?
     } else {
         Config::default()
     };
