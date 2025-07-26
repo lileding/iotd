@@ -1,19 +1,15 @@
-use crate::{
-    broker::Broker,
-    protocol::packet, protocol::v3,
-    transport::AsyncStream,
-};
-use std::{pin::Pin, future::Future, sync::Arc, collections::VecDeque};
+use crate::{broker::Broker, protocol::packet, protocol::v3, transport::AsyncStream};
+use bytes::{Bytes, BytesMut};
+use std::{collections::VecDeque, future::Future, pin::Pin, sync::Arc};
+use thiserror::Error;
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt},
     sync::mpsc,
     task::JoinHandle,
     time::{Duration, Instant},
 };
-use tracing::{debug, info, error};
+use tracing::{debug, error, info};
 use uuid::Uuid;
-use thiserror::Error;
-use bytes::{Bytes, BytesMut};
 
 pub struct Session {
     id: String,
@@ -33,8 +29,8 @@ struct Runtime {
     clean_session: bool,
     keep_alive: u16,
     will_message: Option<WillMessage>,
-    next_packet_id: u16,  // For generating packet IDs for outgoing QoS > 0 messages
-    qos1_queue: VecDeque<InflightMessage>,  // In-flight QoS=1 messages
+    next_packet_id: u16, // For generating packet IDs for outgoing QoS > 0 messages
+    qos1_queue: VecDeque<InflightMessage>, // In-flight QoS=1 messages
 }
 
 #[derive(Debug, Clone)]
@@ -77,7 +73,12 @@ enum SessionError {
 
 type Result<T> = std::result::Result<T, SessionError>;
 
-pub type TakeoverAction = Arc<dyn Fn(Box<dyn AsyncStream>, bool, u16) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> + Send + Sync + 'static>;
+pub type TakeoverAction = Arc<
+    dyn Fn(Box<dyn AsyncStream>, bool, u16) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>
+        + Send
+        + Sync
+        + 'static,
+>;
 
 impl Session {
     pub async fn spawn(broker: Arc<Broker>, stream: Box<dyn AsyncStream>) -> Session {
@@ -102,12 +103,15 @@ impl Session {
                     clean_session: true,
                     keep_alive: 0,
                     will_message: None,
-                    next_packet_id: 1,  // Start from 1, 0 is reserved
+                    next_packet_id: 1, // Start from 1, 0 is reserved
                     qos1_queue: VecDeque::new(),
                 };
 
                 runtime.run().await;
-                runtime.broker.remove_session(&runtime.id, runtime.client_id.as_ref()).await;
+                runtime
+                    .broker
+                    .remove_session(&runtime.id, runtime.client_id.as_ref())
+                    .await;
             }),
         }
     }
@@ -117,23 +121,29 @@ impl Session {
     }
 
     fn make_takeover(command_tx: mpsc::Sender<Command>) -> TakeoverAction {
-        Arc::new(move |stream: Box<dyn AsyncStream>, clean_session: bool, keep_alive: u16| {
-            let command_tx2 = command_tx.clone();
+        Arc::new(
+            move |stream: Box<dyn AsyncStream>, clean_session: bool, keep_alive: u16| {
+                let command_tx2 = command_tx.clone();
 
-            Box::pin(async move {
-                if let Err(e) = command_tx2.send(
-                    Command::Takeover(
-                        stream, clean_session, keep_alive)).await {
-                    error!("Failed to send takeover message: {}", e);
-                }
-            })
-        })
+                Box::pin(async move {
+                    if let Err(e) = command_tx2
+                        .send(Command::Takeover(stream, clean_session, keep_alive))
+                        .await
+                    {
+                        error!("Failed to send takeover message: {}", e);
+                    }
+                })
+            },
+        )
     }
 
     pub async fn cancel(self) -> JoinHandle<()> {
-        self.command_tx.send(Command::Cancel).await.unwrap_or_else(|e| {
-            info!("Session canceled too early: {}", e);
-        });
+        self.command_tx
+            .send(Command::Cancel)
+            .await
+            .unwrap_or_else(|e| {
+                info!("Session canceled too early: {}", e);
+            });
         self.task
     }
 }
@@ -142,13 +152,12 @@ impl Runtime {
     fn next_packet_id(&mut self) -> u16 {
         let id = self.next_packet_id;
         self.next_packet_id = if self.next_packet_id == 65535 {
-            1  // Wrap around, skipping 0
+            1 // Wrap around, skipping 0
         } else {
             self.next_packet_id + 1
         };
         id
     }
-
 
     async fn run(&mut self) {
         let mut state = State::WaitConnect;
@@ -162,7 +171,7 @@ impl Runtime {
                     // TODO: Save subscriptions and unfinished messages to persistent storage
                     // This will be implemented in Milestone 3 for persistent session support
                     break;
-                },
+                }
             }
         }
         debug!("Session {} EXIT RUN", self.id);
@@ -173,7 +182,9 @@ impl Runtime {
 
         let mut stream = match self.stream.take() {
             Some(stream) => stream,
-            None => { return State::Cleanup; },
+            None => {
+                return State::Cleanup;
+            }
         };
 
         tokio::select! {
@@ -228,7 +239,8 @@ impl Runtime {
         keep_alive_interval.tick().await;
 
         // Retransmission timer for QoS=1 messages
-        let retransmission_interval_ms = self.broker.config().server.get_retransmission_interval_ms();
+        let retransmission_interval_ms =
+            self.broker.config().server.get_retransmission_interval_ms();
         let retransmission_enabled = retransmission_interval_ms > 0;
 
         // Timer ticks at half the retransmission interval to check which messages are due
@@ -308,7 +320,7 @@ impl Runtime {
 
                 _ = keep_alive_interval.tick() => {
                     if keep_alive_secs > 0 {
-                        info!("Keep-alive timeout for session {} ({}s without activity)", 
+                        info!("Keep-alive timeout for session {} ({}s without activity)",
                             self.id, keep_alive_secs);
                         if !self.clean_session {
                             next_state = State::WaitTakeover;
@@ -345,29 +357,43 @@ impl Runtime {
 
         match self.command_rx.recv().await {
             Some(Command::Takeover(mut stream, clean_session, keep_alive)) => {
-                match self.on_takeover(&mut stream, clean_session, keep_alive).await {
+                match self
+                    .on_takeover(&mut stream, clean_session, keep_alive)
+                    .await
+                {
                     Ok(_) => {
                         self.stream.replace(stream);
                         State::Processing
-                    },
+                    }
                     Err(e) => {
                         info!("Session {} error: {}", self.id, e);
                         State::WaitTakeover
                     }
                 }
-            },
+            }
             Some(Command::Cancel) => State::Cleanup,
             _ => State::Cleanup,
         }
     }
 
-    async fn on_connect(&mut self, connect: packet::ConnectPacket, mut stream: Box<dyn AsyncStream>) -> Result<State> {
-        info!("CONNECT received: client_id={}, clean_session={}, will_flag={}", 
-            connect.client_id, connect.clean_session, connect.will_flag);
+    async fn on_connect(
+        &mut self,
+        connect: packet::ConnectPacket,
+        mut stream: Box<dyn AsyncStream>,
+    ) -> Result<State> {
+        info!(
+            "CONNECT received: client_id={}, clean_session={}, will_flag={}",
+            connect.client_id, connect.clean_session, connect.will_flag
+        );
 
         // Validate protocol name and version
-        if connect.protocol_name != v3::PROTOCOL_NAME || connect.protocol_level != v3::PROTOCOL_LEVEL {
-            info!("Invalid protocol: name={}, level={}", connect.protocol_name, connect.protocol_level);
+        if connect.protocol_name != v3::PROTOCOL_NAME
+            || connect.protocol_level != v3::PROTOCOL_LEVEL
+        {
+            info!(
+                "Invalid protocol: name={}, level={}",
+                connect.protocol_name, connect.protocol_level
+            );
             let connack = packet::ConnAckPacket {
                 session_present: false,
                 return_code: v3::connect_return_codes::UNACCEPTABLE_PROTOCOL_VERSION,
@@ -395,7 +421,10 @@ impl Runtime {
 
             // Check character set (0-9, a-z, A-Z)
             if !connect.client_id.chars().all(|c| c.is_ascii_alphanumeric()) {
-                info!("Client ID contains invalid characters: {}", connect.client_id);
+                info!(
+                    "Client ID contains invalid characters: {}",
+                    connect.client_id
+                );
                 let connack = packet::ConnAckPacket {
                     session_present: false,
                     return_code: v3::connect_return_codes::IDENTIFIER_REJECTED,
@@ -418,7 +447,7 @@ impl Runtime {
         }
 
         // Update session parameters
-        self.clean_session= connect.clean_session;
+        self.clean_session = connect.clean_session;
         self.keep_alive = connect.keep_alive;
 
         // Store Will message if present
@@ -440,8 +469,15 @@ impl Runtime {
             self.client_id.replace(connect.client_id.clone());
 
             // Check client ID collision and do take over
-            if let Some(takeover) = self.broker.has_collision(&connect.client_id, self.takeover.clone()).await {
-                info!("Client {} already connected, initiating takeover", connect.client_id);
+            if let Some(takeover) = self
+                .broker
+                .has_collision(&connect.client_id, self.takeover.clone())
+                .await
+            {
+                info!(
+                    "Client {} already connected, initiating takeover",
+                    connect.client_id
+                );
 
                 takeover(stream, connect.clean_session, connect.keep_alive).await;
                 return Ok(State::Cleanup); // Exit this session task
@@ -461,7 +497,12 @@ impl Runtime {
         Ok(State::Processing)
     }
 
-    async fn on_takeover(&mut self, stream: &mut Box<dyn AsyncStream>, clean_session: bool, keep_alive: u16) -> Result<()> {
+    async fn on_takeover(
+        &mut self,
+        stream: &mut Box<dyn AsyncStream>,
+        clean_session: bool,
+        keep_alive: u16,
+    ) -> Result<()> {
         // Session present is true if clean_session=false (persistent session was resumed)
         let session_present = !clean_session;
         let connack = packet::ConnAckPacket {
@@ -478,14 +519,16 @@ impl Runtime {
                     self.broker.unsubscribe_all(&self.id).await;
                 }
                 Ok(())
-            },
-            Err(e) => {
-                Err(e.into())
             }
+            Err(e) => Err(e.into()),
         }
     }
 
-    async fn on_packet<W: AsyncWrite + Unpin>(&mut self, pack: packet::Packet, writer: &mut W) -> Result<bool> {
+    async fn on_packet<W: AsyncWrite + Unpin>(
+        &mut self,
+        pack: packet::Packet,
+        writer: &mut W,
+    ) -> Result<bool> {
         // Read and parse MQTT packet from stream
         match pack {
             packet::Packet::Publish(p) => self.on_publish(p, writer).await,
@@ -501,8 +544,11 @@ impl Runtime {
         }
     }
 
-
-    async fn on_message<W: AsyncWrite + Unpin>(&mut self, message: packet::Packet, writer: &mut W) -> Result<()> {
+    async fn on_message<W: AsyncWrite + Unpin>(
+        &mut self,
+        message: packet::Packet,
+        writer: &mut W,
+    ) -> Result<()> {
         if let packet::Packet::Publish(mut pub_packet) = message {
             if pub_packet.qos == packet::QoS::AtMostOnce {
                 // QoS=0: Just send it
@@ -514,14 +560,14 @@ impl Runtime {
                     // QoS=1 without DUP: Assign packet ID and track it
                     let packet_id = self.next_packet_id();
                     pub_packet.packet_id = Some(packet_id);
-                    
+
                     debug!("Sending new QoS=1 message with packet_id={packet_id}");
-                    
+
                     // Send it immediately
                     let mut buf = BytesMut::new();
                     packet::Packet::Publish(pub_packet.clone()).encode(&mut buf);
                     writer.write_all(&buf).await?;
-                    
+
                     // Add to in-flight queue with DUP flag for retransmission
                     pub_packet.dup = true;
                     let inflight = InflightMessage {
@@ -541,22 +587,37 @@ impl Runtime {
         Ok(())
     }
 
-    async fn on_puback<W: AsyncWrite + Unpin>(&mut self, packet: packet::PubAckPacket, _writer: &mut W) -> Result<bool> {
-        info!("PUBACK received for session {}: packet_id={}", self.id, packet.packet_id);
+    async fn on_puback<W: AsyncWrite + Unpin>(
+        &mut self,
+        packet: packet::PubAckPacket,
+        _writer: &mut W,
+    ) -> Result<bool> {
+        info!(
+            "PUBACK received for session {}: packet_id={}",
+            self.id, packet.packet_id
+        );
 
         // Find and remove the acknowledged message from in-flight queue
-        self.qos1_queue.retain(|inflight| {
-            inflight.packet.packet_id != Some(packet.packet_id)
-        });
-        
-        debug!("Removed acknowledged message, {} messages still in-flight", self.qos1_queue.len());
+        self.qos1_queue
+            .retain(|inflight| inflight.packet.packet_id != Some(packet.packet_id));
+
+        debug!(
+            "Removed acknowledged message, {} messages still in-flight",
+            self.qos1_queue.len()
+        );
 
         Ok(true)
     }
 
-    async fn on_publish<W: AsyncWrite + Unpin>(&mut self, packet: packet::PublishPacket, writer: &mut W) -> Result<bool> {
-        info!("PUBLISH received for session {}: topic={}, qos={:?}, retain={}, dup={}", 
-            self.id, packet.topic, packet.qos, packet.retain, packet.dup);
+    async fn on_publish<W: AsyncWrite + Unpin>(
+        &mut self,
+        packet: packet::PublishPacket,
+        writer: &mut W,
+    ) -> Result<bool> {
+        info!(
+            "PUBLISH received for session {}: topic={}, qos={:?}, retain={}, dup={}",
+            self.id, packet.topic, packet.qos, packet.retain, packet.dup
+        );
 
         // Handle QoS=1: Send PUBACK if required
         if packet.qos == packet::QoS::AtLeastOnce {
@@ -566,11 +627,17 @@ impl Runtime {
                 let mut buf = BytesMut::new();
                 packet::Packet::PubAck(puback).encode(&mut buf);
                 writer.write_all(&buf).await?;
-                info!("Sent PUBACK for packet_id={} to session {}", packet_id, self.id);
+                info!(
+                    "Sent PUBACK for packet_id={} to session {}",
+                    packet_id, self.id
+                );
 
                 // Check DUP flag - if it's a duplicate, don't route
                 if packet.dup {
-                    info!("Received duplicate PUBLISH with packet_id={}, not routing", packet_id);
+                    info!(
+                        "Received duplicate PUBLISH with packet_id={}, not routing",
+                        packet_id
+                    );
                     return Ok(true); // Still return success, just don't route
                 }
             } else {
@@ -586,15 +653,21 @@ impl Runtime {
         Ok(true)
     }
 
-    async fn on_subscribe<W: AsyncWrite + Unpin>(&mut self, packet: packet::SubscribePacket, writer: &mut W) -> Result<bool> {
-        info!("SUBSCRIBE received for session {}: topics={:?}", self.id, packet.topic_filters);
+    async fn on_subscribe<W: AsyncWrite + Unpin>(
+        &mut self,
+        packet: packet::SubscribePacket,
+        writer: &mut W,
+    ) -> Result<bool> {
+        info!(
+            "SUBSCRIBE received for session {}: topics={:?}",
+            self.id, packet.topic_filters
+        );
 
         // Handle subscription logic through router
-        let (return_codes, retained_messages) = self.broker.subscribe(
-            &self.id,
-            self.message_tx.clone(),
-            &packet.topic_filters,
-        ).await;
+        let (return_codes, retained_messages) = self
+            .broker
+            .subscribe(&self.id, self.message_tx.clone(), &packet.topic_filters)
+            .await;
 
         // Send SUBACK first
         let suback = packet::SubAckPacket {
@@ -607,17 +680,28 @@ impl Runtime {
 
         // Then send any retained messages
         for retained_msg in retained_messages {
-            self.message_tx.send(packet::Packet::Publish(retained_msg)).await?;
+            self.message_tx
+                .send(packet::Packet::Publish(retained_msg))
+                .await?;
         }
 
         Ok(true)
     }
 
-    async fn on_unsubscribe<W: AsyncWrite + Unpin>(&mut self, packet: packet::UnsubscribePacket, writer: &mut W) -> Result<bool> {
-        info!("UNSUBSCRIBE received for session {}: topics={:?}", self.id, packet.topic_filters);
+    async fn on_unsubscribe<W: AsyncWrite + Unpin>(
+        &mut self,
+        packet: packet::UnsubscribePacket,
+        writer: &mut W,
+    ) -> Result<bool> {
+        info!(
+            "UNSUBSCRIBE received for session {}: topics={:?}",
+            self.id, packet.topic_filters
+        );
 
         // Handle unsubscription logic through router
-        self.broker.unsubscribe(&self.id, &packet.topic_filters).await;
+        self.broker
+            .unsubscribe(&self.id, &packet.topic_filters)
+            .await;
 
         // Send UNSUBACK
         let unsuback = packet::UnsubAckPacket {
@@ -646,7 +730,8 @@ impl Runtime {
 
     async fn on_retransmit<W: AsyncWrite + Unpin>(&mut self, _writer: &mut W) -> Result<()> {
         // Get config values
-        let retransmission_interval_ms = self.broker.config().server.get_retransmission_interval_ms();
+        let retransmission_interval_ms =
+            self.broker.config().server.get_retransmission_interval_ms();
         if retransmission_interval_ms == 0 {
             return Ok(()); // Retransmission disabled
         }
@@ -658,18 +743,22 @@ impl Runtime {
         // Update retry counts and collect messages to retransmit
         self.qos1_queue.retain_mut(|inflight| {
             let elapsed_ms = now.duration_since(inflight.timestamp).as_millis() as u64;
-            
+
             if elapsed_ms >= retransmission_interval_ms {
                 inflight.retry_count += 1;
                 inflight.timestamp = now;
-                
+
                 if inflight.retry_count > max_retransmission_limit {
-                    info!("Message packet_id={:?} exceeded max retransmission limit ({}), dropping", 
-                          inflight.packet.packet_id, max_retransmission_limit);
+                    info!(
+                        "Message packet_id={:?} exceeded max retransmission limit ({}), dropping",
+                        inflight.packet.packet_id, max_retransmission_limit
+                    );
                     false // Remove from queue
                 } else {
-                    debug!("Retransmitting message packet_id={:?}, retry_count={}/{}", 
-                          inflight.packet.packet_id, inflight.retry_count, max_retransmission_limit);
+                    debug!(
+                        "Retransmitting message packet_id={:?}, retry_count={}/{}",
+                        inflight.packet.packet_id, inflight.retry_count, max_retransmission_limit
+                    );
                     to_retransmit.push(inflight.packet.clone());
                     true // Keep in queue
                 }
@@ -680,7 +769,9 @@ impl Runtime {
 
         // Send all messages that need retransmission to mailbox
         for packet in to_retransmit {
-            self.message_tx.send(packet::Packet::Publish(packet)).await?;
+            self.message_tx
+                .send(packet::Packet::Publish(packet))
+                .await?;
         }
 
         Ok(())
@@ -688,7 +779,10 @@ impl Runtime {
 
     async fn publish_will(&mut self) {
         if let Some(will) = self.will_message.take() {
-            info!("Publishing Will message for session {}: topic={}", self.id, will.topic);
+            info!(
+                "Publishing Will message for session {}: topic={}",
+                self.id, will.topic
+            );
             let packet = packet::PublishPacket {
                 topic: will.topic,
                 packet_id: None, // Will messages are QoS 0 for Milestone 1

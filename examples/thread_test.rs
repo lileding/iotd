@@ -3,19 +3,22 @@ use std::time::Duration;
 
 fn main() {
     println!("Checking Tokio runtime configuration...");
-    
+
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    
+
     runtime.block_on(async {
-        println!("Available parallelism: {}", std::thread::available_parallelism().unwrap());
-        
+        println!(
+            "Available parallelism: {}",
+            std::thread::available_parallelism().unwrap()
+        );
+
         // Get current thread ID
         let main_thread = thread::current().id();
         println!("Main task thread: {:?}", main_thread);
-        
+
         // Spawn multiple tasks and check their thread IDs
         let mut handles = vec![];
-        
+
         for i in 0..20 {
             let handle = tokio::spawn(async move {
                 let thread_id = thread::current().id();
@@ -25,7 +28,7 @@ fn main() {
             });
             handles.push(handle);
         }
-        
+
         // Collect results
         let mut thread_ids = std::collections::HashSet::new();
         for handle in handles {
@@ -33,9 +36,12 @@ fn main() {
             thread_ids.insert(thread_id);
             println!("Task {} ran on thread {:?}", task_num, thread_id);
         }
-        
+
         println!("\nSummary:");
         println!("Total unique threads used: {}", thread_ids.len());
-        println!("Expected threads (CPU cores): {}", std::thread::available_parallelism().unwrap());
+        println!(
+            "Expected threads (CPU cores): {}",
+            std::thread::available_parallelism().unwrap()
+        );
     });
 }

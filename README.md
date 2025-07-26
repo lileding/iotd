@@ -30,9 +30,9 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 
 ## Current Status
 
-**IoTD has nearly completed Milestone 2 - QoS=1 Support! 🚀**
+**IoTD has completed Milestone 2 - QoS=1 Support! 🎉**
 
-The project has implemented full QoS=1 "at least once" delivery guarantees. Only cleanup tasks remain before moving to Milestone 3 (Persistence).
+The project now has full QoS=1 "at least once" delivery guarantees with comprehensive testing and MQTT 3.1.1 specification compliance.
 
 ### Completed Features ✅
 
@@ -46,24 +46,25 @@ The project has implemented full QoS=1 "at least once" delivery guarantees. Only
 - **Protocol compliance** with validation, error codes, and client ID rules
 - **Topic validation** for both topic names and subscription filters
 - **Race-condition-free architecture** using CancellationToken
-- **Comprehensive test suite** with 74+ tests
+- **Comprehensive test suite** with 85+ tests
 
-#### Milestone 2 - QoS=1 Support (Nearly Complete)
-- ✅ **QoS=1 message delivery** - "At least once" guarantee implemented
-- ✅ **PUBACK handling** - Proper acknowledgment flow
-- ✅ **Message retransmission** - Automatic retry with DUP flag
-- ✅ **Multiple in-flight messages** - No artificial ordering constraints
-- ✅ **Duplicate detection** - Prevents routing duplicates
-- ✅ **Configurable retransmission** - Interval and retry limits
-- ✅ **Comprehensive QoS=1 tests** - All edge cases covered
-- 📋 **Packet ID management** - Basic implementation, needs collision detection
-- 📋 **Session persistence** - For clean_session=false support
+#### Milestone 2 - QoS=1 Support ✅ **COMPLETED**
+- ✅ **QoS=1 message delivery** - "At least once" guarantee fully implemented
+- ✅ **PUBACK handling** - Proper acknowledgment flow for reliable delivery
+- ✅ **Message retransmission** - Automatic retry with DUP flag on timeout
+- ✅ **Multiple in-flight messages** - Support for concurrent QoS=1 messages
+- ✅ **Duplicate detection** - DUP flag prevents routing duplicate messages
+- ✅ **Packet ID management** - Sequential generation with wrap-around
+- ✅ **Configurable retransmission** - Interval and max retry limits
+- ✅ **QoS downgrade** - Proper min(publish QoS, subscription QoS)
+- ✅ **Comprehensive QoS=1 tests** - 10+ tests covering all scenarios
+- ✅ **Performance benchmarks** - Tested with high message throughput
 
 ### Roadmap 📋
 
 #### Near-term (v0.x - v1.0)
-- **Milestone 2** (Current): Final QoS=1 cleanup tasks
-- **Milestone 3**: Persistence layer (SQLite, file-based)
+- **Milestone 2**: ✅ QoS=1 Support (Completed)
+- **Milestone 3** (Next): Persistence layer (SQLite, file-based)
 - **Milestone 4**: Security (TLS, authentication, ACLs)
 - **Milestone 5**: QoS=2 "exactly once" delivery
 - **Milestone 6**: Observability (Prometheus, Grafana)

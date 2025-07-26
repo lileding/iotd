@@ -12,9 +12,7 @@ pub fn init_test_logging() {
             .and_then(|s| s.parse::<tracing::Level>().ok())
             .unwrap_or(tracing::Level::INFO);
 
-        tracing_subscriber::fmt()
-            .with_max_level(log_level)
-            .init();
+        tracing_subscriber::fmt().with_max_level(log_level).init();
     });
 }
 
@@ -63,7 +61,6 @@ async fn test_basic_connect_and_disconnect() {
     let _ = server.stop().await;
 }
 
-
 #[tokio::test]
 async fn test_publish_subscribe() {
     init_test_logging();
@@ -99,7 +96,7 @@ async fn test_publish_subscribe() {
     match timeout(Duration::from_secs(1), subscriber.read_exact(&mut response)).await {
         Ok(Ok(_)) => {
             assert_eq!(response[0], 0x90); // SUBACK
-            assert_eq!(response[2], 0x00); // Packet ID = 1 (high byte) 
+            assert_eq!(response[2], 0x00); // Packet ID = 1 (high byte)
             assert_eq!(response[3], 0x01); // Packet ID = 1 (low byte)
             assert_eq!(response[4], 0x00); // Return code = Maximum QoS 0
         }
@@ -139,7 +136,6 @@ async fn test_publish_subscribe() {
 
     let _ = server.stop().await;
 }
-
 
 #[tokio::test]
 async fn test_clean_session_false_persistence() {
@@ -211,7 +207,6 @@ async fn test_clean_session_false_persistence() {
     let _ = server.stop().await;
 }
 
-
 #[tokio::test]
 async fn test_clean_session_true_no_persistence() {
     init_test_logging();
@@ -275,7 +270,6 @@ async fn test_clean_session_true_no_persistence() {
 
     let _ = server.stop().await;
 }
-
 
 #[tokio::test]
 async fn test_session_takeover() {
@@ -355,7 +349,6 @@ async fn test_session_takeover() {
     let _ = server.stop().await;
 }
 
-
 #[tokio::test]
 async fn test_clean_session_transition() {
     init_test_logging();
@@ -430,7 +423,6 @@ async fn test_clean_session_transition() {
     let _ = server.stop().await;
 }
 
-
 #[tokio::test]
 async fn test_keep_alive_timeout() {
     init_test_logging();
@@ -443,7 +435,7 @@ async fn test_keep_alive_timeout() {
     let mut stream = TcpStream::connect(&address).await.unwrap();
     let connect_packet = vec![
         0x10, // CONNECT packet type
-        16, // Remaining length
+        16,   // Remaining length
         0x00, 0x04, // Protocol name length
         b'M', b'Q', b'T', b'T', // Protocol name "MQTT"
         0x04, // Protocol level (3.1.1)
@@ -466,14 +458,13 @@ async fn test_keep_alive_timeout() {
     // Try to read - should get disconnected
     let mut buf = [0u8; 1];
     match timeout(Duration::from_millis(500), stream.read_exact(&mut buf)).await {
-        Ok(Ok(0)) | Err(_) => {}, // Connection closed or timeout - both are acceptable
+        Ok(Ok(0)) | Err(_) => {} // Connection closed or timeout - both are acceptable
         Ok(Ok(_)) => panic!("Should have been disconnected due to keep-alive timeout"),
-        Ok(Err(_)) => {}, // IO error also acceptable (connection closed)
+        Ok(Err(_)) => {} // IO error also acceptable (connection closed)
     }
 
     let _ = server.stop().await;
 }
-
 
 #[tokio::test]
 async fn test_keep_alive_with_pingreq() {
@@ -487,7 +478,7 @@ async fn test_keep_alive_with_pingreq() {
     let mut stream = TcpStream::connect(&address).await.unwrap();
     let connect_packet = vec![
         0x10, // CONNECT packet type
-        16, // Remaining length
+        16,   // Remaining length
         0x00, 0x04, // Protocol name length
         b'M', b'Q', b'T', b'T', // Protocol name "MQTT"
         0x04, // Protocol level (3.1.1)
@@ -527,7 +518,6 @@ async fn test_keep_alive_with_pingreq() {
     let _ = server.stop().await;
 }
 
-
 #[tokio::test]
 async fn test_keep_alive_zero_disabled() {
     init_test_logging();
@@ -560,21 +550,26 @@ async fn test_keep_alive_zero_disabled() {
     let _ = server.stop().await;
 }
 
-
 async fn send_connect(stream: &mut TcpStream, client_id: &str) {
     send_connect_with_flags(stream, client_id, 0x02).await; // Default to clean session
 }
 
 async fn send_connect_with_flags(stream: &mut TcpStream, client_id: &str, flags: u8) {
     let mut connect_packet = vec![
-        0x10, // CONNECT packet type
+        0x10,                         // CONNECT packet type
         (12 + client_id.len()) as u8, // Remaining length
-        0x00, 0x04, // Protocol name length
-        b'M', b'Q', b'T', b'T', // Protocol name "MQTT"
-        0x04, // Protocol level (3.1.1)
+        0x00,
+        0x04, // Protocol name length
+        b'M',
+        b'Q',
+        b'T',
+        b'T',  // Protocol name "MQTT"
+        0x04,  // Protocol level (3.1.1)
         flags, // Connect flags
-        0x00, 0x3C, // Keep alive = 60 seconds
-        0x00, client_id.len() as u8, // Client ID length
+        0x00,
+        0x3C, // Keep alive = 60 seconds
+        0x00,
+        client_id.len() as u8, // Client ID length
     ];
     connect_packet.extend_from_slice(client_id.as_bytes());
 
@@ -659,7 +654,6 @@ async fn test_retained_message_basic() {
     let _ = server.stop().await;
 }
 
-
 #[tokio::test]
 async fn test_retained_message_update() {
     init_test_logging();
@@ -735,7 +729,6 @@ async fn test_retained_message_update() {
     let _ = server.stop().await;
 }
 
-
 #[tokio::test]
 async fn test_retained_message_delete() {
     init_test_logging();
@@ -766,7 +759,7 @@ async fn test_retained_message_delete() {
         0x07, // Remaining length = 7 (no payload)
         0x00, 0x05, // Topic length = 5
         b't', b'e', b's', b't', b'/', // Topic
-                                      // No payload
+              // No payload
     ];
     publisher.write_all(&delete).await.unwrap();
 
@@ -794,14 +787,18 @@ async fn test_retained_message_delete() {
 
     // Should NOT receive any retained message
     let mut header = [0u8; 2];
-    match timeout(Duration::from_millis(500), subscriber.read_exact(&mut header)).await {
+    match timeout(
+        Duration::from_millis(500),
+        subscriber.read_exact(&mut header),
+    )
+    .await
+    {
         Ok(_) => panic!("Should not receive retained message after deletion"),
         Err(_) => {} // Expected timeout
     }
 
     let _ = server.stop().await;
 }
-
 
 #[tokio::test]
 async fn test_retained_message_wildcard() {
@@ -824,10 +821,10 @@ async fn test_retained_message_wildcard() {
 
     for (topic, payload) in &topics {
         let mut publish = vec![
-            0x31, // PUBLISH with retain
+            0x31,                                    // PUBLISH with retain
             (2 + topic.len() + payload.len()) as u8, // Remaining length
-            (topic.len() >> 8) as u8, // Topic length high byte
-            (topic.len() & 0xFF) as u8, // Topic length low byte
+            (topic.len() >> 8) as u8,                // Topic length high byte
+            (topic.len() & 0xFF) as u8,              // Topic length low byte
         ];
         publish.extend_from_slice(topic.as_bytes());
         publish.extend_from_slice(payload.as_bytes());
@@ -846,7 +843,8 @@ async fn test_retained_message_wildcard() {
         0x10, // Remaining length = 16
         0x00, 0x01, // Packet ID = 1
         0x00, 0x0B, // Topic filter length = 11
-        b'h', b'o', b'm', b'e', b'/', b'+', b'/', b't', b'e', b'm', b'p', // "home/+/temp" (11 chars)
+        b'h', b'o', b'm', b'e', b'/', b'+', b'/', b't', b'e', b'm',
+        b'p', // "home/+/temp" (11 chars)
         0x00, // QoS = 0
     ];
     subscriber.write_all(&subscribe_packet).await.unwrap();
@@ -875,11 +873,13 @@ async fn test_retained_message_wildcard() {
         }
     }
 
-    assert_eq!(retained_count, 2, "Should receive 2 retained messages for wildcard subscription");
+    assert_eq!(
+        retained_count, 2,
+        "Should receive 2 retained messages for wildcard subscription"
+    );
 
     let _ = server.stop().await;
 }
-
 
 #[tokio::test]
 async fn test_will_message_on_disconnect() {
@@ -958,15 +958,14 @@ async fn test_will_message_on_disconnect() {
 
     // Verify it's the Will message
     let topic_len = ((payload[0] as usize) << 8) | (payload[1] as usize);
-    let topic = std::str::from_utf8(&payload[2..2+topic_len]).unwrap();
+    let topic = std::str::from_utf8(&payload[2..2 + topic_len]).unwrap();
     assert_eq!(topic, "will/topic");
 
-    let message = &payload[2+topic_len..];
+    let message = &payload[2 + topic_len..];
     assert_eq!(message, b"offline");
 
     let _ = server.stop().await;
 }
-
 
 #[tokio::test]
 async fn test_will_message_not_sent_on_disconnect() {
@@ -1018,8 +1017,7 @@ async fn test_will_message_not_sent_on_disconnect() {
         0x0F, // Remaining length
         0x00, 0x01, // Packet ID
         0x00, 0x0A, // Topic filter length
-        b'w', b'i', b'l', b'l', b'/', b't', b'o', b'p', b'i', b'c',
-        0x00, // QoS
+        b'w', b'i', b'l', b'l', b'/', b't', b'o', b'p', b'i', b'c', 0x00, // QoS
     ];
     subscriber.write_all(&subscribe_packet).await.unwrap();
 
@@ -1036,14 +1034,18 @@ async fn test_will_message_not_sent_on_disconnect() {
 
     // Subscriber should NOT receive Will message
     let mut header = [0u8; 2];
-    match timeout(Duration::from_millis(500), subscriber.read_exact(&mut header)).await {
+    match timeout(
+        Duration::from_millis(500),
+        subscriber.read_exact(&mut header),
+    )
+    .await
+    {
         Ok(_) => panic!("Should not receive Will message after normal DISCONNECT"),
         Err(_) => {} // Expected timeout
     }
 
     let _ = server.stop().await;
 }
-
 
 #[tokio::test]
 async fn test_will_message_on_keepalive_timeout() {
@@ -1095,8 +1097,7 @@ async fn test_will_message_on_keepalive_timeout() {
         0x11, // Remaining length
         0x00, 0x01, // Packet ID
         0x00, 0x0C, // Topic filter length
-        b'w', b'i', b'l', b'l', b'/', b't', b'i', b'm', b'e', b'o', b'u', b't',
-        0x00, // QoS
+        b'w', b'i', b'l', b'l', b'/', b't', b'i', b'm', b'e', b'o', b'u', b't', 0x00, // QoS
     ];
     subscriber.write_all(&subscribe_packet).await.unwrap();
 
@@ -1117,15 +1118,14 @@ async fn test_will_message_on_keepalive_timeout() {
 
     // Verify it's the Will message
     let topic_len = ((payload[0] as usize) << 8) | (payload[1] as usize);
-    let topic = std::str::from_utf8(&payload[2..2+topic_len]).unwrap();
+    let topic = std::str::from_utf8(&payload[2..2 + topic_len]).unwrap();
     assert_eq!(topic, "will/timeout");
 
-    let message = &payload[2+topic_len..];
+    let message = &payload[2 + topic_len..];
     assert_eq!(message, b"timeout");
 
     let _ = server.stop().await;
 }
-
 
 #[tokio::test]
 async fn test_protocol_validation() {
@@ -1207,7 +1207,6 @@ async fn test_protocol_validation() {
 
     let _ = server.stop().await;
 }
-
 
 #[tokio::test]
 async fn test_client_id_validation() {
@@ -1322,7 +1321,6 @@ async fn test_client_id_validation() {
     let _ = server.stop().await;
 }
 
-
 #[tokio::test]
 async fn test_topic_validation() {
     init_test_logging();
@@ -1404,4 +1402,3 @@ async fn test_topic_validation() {
 
     let _ = server.stop().await;
 }
-

@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use iotd::config::Config;
+use std::fs;
 use tokio::signal;
 use tracing::{info, Level};
-use std::fs;
 
 // Version information
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let mut listen_address: Option<String> = None;
     let mut config_file: Option<String> = None;
-    
+
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -81,16 +81,14 @@ async fn main() -> Result<()> {
         }
         i += 1;
     }
-    
+
     // Use RUST_LOG env var if set, otherwise default to INFO
     let log_level = std::env::var("RUST_LOG")
         .ok()
         .and_then(|s| s.parse::<Level>().ok())
         .unwrap_or(Level::INFO);
-    
-    tracing_subscriber::fmt()
-        .with_max_level(log_level)
-        .init();
+
+    tracing_subscriber::fmt().with_max_level(log_level).init();
 
     info!("Starting IoTD Server v{}-{}", VERSION, GIT_REVISION);
 
@@ -112,11 +110,11 @@ async fn main() -> Result<()> {
 
     info!("Listening on: {}", config.server.address);
     let server = iotd::server::start(config).await?;
-    
+
     // Wait for Ctrl+C
     signal::ctrl_c().await?;
     info!("Received SIGINT, initiating graceful shutdown...");
-    
+
     server.stop().await?;
     info!("Graceful shutdown completed");
 

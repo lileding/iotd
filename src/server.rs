@@ -1,12 +1,12 @@
-use crate::config::Config;
 use crate::broker::Broker;
+use crate::config::Config;
 use crate::transport::{AsyncListener, TcpAsyncListener};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{RwLock, Mutex};
-use tokio_util::sync::CancellationToken;
-use tracing::{info, error};
+use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::{Mutex, RwLock};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 
 pub type Result<T> = std::result::Result<T, ServerError>;
 
@@ -58,13 +58,21 @@ impl Server {
         info!("Starting Server");
 
         // Bind the listener directly to the address
-        let listener = TcpAsyncListener::bind(&self.config.server.address).await
-            .map_err(|e| ServerError::StartupFailed(format!("Failed to bind to {}: {e}", self.config.server.address)))?;
+        let listener = TcpAsyncListener::bind(&self.config.server.address)
+            .await
+            .map_err(|e| {
+                ServerError::StartupFailed(format!(
+                    "Failed to bind to {}: {e}",
+                    self.config.server.address
+                ))
+            })?;
 
         // Get the actual bound address (useful for port 0)
-        let bound_addr = listener.local_addr().await
+        let bound_addr = listener
+            .local_addr()
+            .await
             .map_err(|e| ServerError::StartupFailed(format!("Failed to get local address: {e}")))?;
-        
+
         *self.address.write().await = Some(bound_addr.to_string());
 
         info!("Server listening on {}", bound_addr);
@@ -119,7 +127,11 @@ impl Server {
         self.address.read().await.clone()
     }
 
-    async fn run_server(broker: Arc<Broker>, listener: TcpAsyncListener, shutdown_token: CancellationToken) {
+    async fn run_server(
+        broker: Arc<Broker>,
+        listener: TcpAsyncListener,
+        shutdown_token: CancellationToken,
+    ) {
         // Main server loop
         loop {
             tokio::select! {
@@ -128,7 +140,7 @@ impl Server {
                     match accept_result {
                         Ok(stream) => {
                             info!("New client connected");
-                            
+
                             // Add client to broker
                             broker.add_client(stream).await;
                         }
@@ -154,4 +166,3 @@ impl Server {
         info!("Server loop completed");
     }
 }
-

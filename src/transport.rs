@@ -1,8 +1,8 @@
+use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
-use anyhow::Result;
 
 #[async_trait]
 pub trait AsyncListener: Send + Sync {
@@ -15,7 +15,12 @@ pub trait AsyncListener: Send + Sync {
 pub trait AsyncStream: AsyncRead + AsyncWrite + Send + Sync + Unpin {
     async fn close(&mut self) -> Result<()>;
     fn peer_addr(&self) -> Result<SocketAddr>;
-    fn split(&mut self) -> (Box<dyn AsyncRead + Send + Sync + Unpin + '_>, Box<dyn AsyncWrite + Send + Sync + Unpin + '_>);
+    fn split(
+        &mut self,
+    ) -> (
+        Box<dyn AsyncRead + Send + Sync + Unpin + '_>,
+        Box<dyn AsyncWrite + Send + Sync + Unpin + '_>,
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -119,7 +124,12 @@ impl AsyncStream for TcpAsyncStream {
         Ok(self.stream.peer_addr()?)
     }
 
-    fn split(&mut self) -> (Box<dyn AsyncRead + Send + Sync + Unpin + '_>, Box<dyn AsyncWrite + Send + Sync + Unpin + '_>) {
+    fn split(
+        &mut self,
+    ) -> (
+        Box<dyn AsyncRead + Send + Sync + Unpin + '_>,
+        Box<dyn AsyncWrite + Send + Sync + Unpin + '_>,
+    ) {
         let (r, w) = self.stream.split();
         (Box::new(r), Box::new(w))
     }

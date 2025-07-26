@@ -162,7 +162,7 @@ impl Packet {
         // Read the remaining packet data
         let mut packet_data = vec![0u8; remaining_length as usize];
         reader.read_exact(&mut packet_data).await?;
-        
+
         let mut payload_cursor = Cursor::new(&packet_data[..]);
 
         let packet = match packet_type {
@@ -211,7 +211,9 @@ impl Packet {
     }
 }
 
-async fn decode_remaining_length_async<R: AsyncRead + Unpin>(reader: &mut R) -> Result<u32, PacketError> {
+async fn decode_remaining_length_async<R: AsyncRead + Unpin>(
+    reader: &mut R,
+) -> Result<u32, PacketError> {
     let mut multiplier = 1;
     let mut value = 0;
     let mut byte_count = 0;
@@ -262,7 +264,7 @@ fn decode_string(cursor: &mut Cursor<&[u8]>) -> Result<String, PacketError> {
 
     let mut bytes = vec![0u8; len];
     cursor.copy_to_slice(&mut bytes);
-    
+
     String::from_utf8(bytes).map_err(|_| PacketError::InvalidUtf8)
 }
 
@@ -277,7 +279,7 @@ fn decode_connect(cursor: &mut Cursor<&[u8]>) -> Result<ConnectPacket, PacketErr
     let connect_flags = cursor.get_u8();
     let keep_alive = cursor.get_u16();
     let client_id = decode_string(cursor)?;
-    
+
     // Parse Will fields from connect flags
     let will_flag = (connect_flags & 0x04) != 0;
     let will_qos = if will_flag {
@@ -291,7 +293,7 @@ fn decode_connect(cursor: &mut Cursor<&[u8]>) -> Result<ConnectPacket, PacketErr
         QoS::AtMostOnce
     };
     let will_retain = (connect_flags & 0x20) != 0;
-    
+
     // Read Will topic and payload if Will flag is set
     let (will_topic, will_payload) = if will_flag {
         let topic = decode_string(cursor)?;
@@ -362,7 +364,10 @@ fn decode_subscribe(cursor: &mut Cursor<&[u8]>) -> Result<SubscribePacket, Packe
         topic_filters.push((topic, qos));
     }
 
-    Ok(SubscribePacket { packet_id, topic_filters })
+    Ok(SubscribePacket {
+        packet_id,
+        topic_filters,
+    })
 }
 
 fn decode_unsubscribe(cursor: &mut Cursor<&[u8]>) -> Result<UnsubscribePacket, PacketError> {
@@ -374,7 +379,10 @@ fn decode_unsubscribe(cursor: &mut Cursor<&[u8]>) -> Result<UnsubscribePacket, P
         topic_filters.push(topic);
     }
 
-    Ok(UnsubscribePacket { packet_id, topic_filters })
+    Ok(UnsubscribePacket {
+        packet_id,
+        topic_filters,
+    })
 }
 
 fn encode_connack(packet: &ConnAckPacket, buf: &mut BytesMut) {
@@ -404,11 +412,11 @@ fn encode_publish(packet: &PublishPacket, buf: &mut BytesMut) {
 
     encode_remaining_length(remaining_length as u32, buf);
     encode_string(&packet.topic, buf);
-    
+
     if let Some(packet_id) = packet.packet_id {
         buf.put_u16(packet_id);
     }
-    
+
     buf.put_slice(&packet.payload);
 }
 
@@ -466,21 +474,21 @@ mod tests {
         // Manually encode CONNECT packet
         let mut buf = BytesMut::new();
         buf.put_u8(0x10); // CONNECT packet type
-        
+
         let mut payload = BytesMut::new();
         encode_string(&original.protocol_name, &mut payload);
         payload.put_u8(original.protocol_level);
         payload.put_u8(0x02); // Connect flags: clean_session=1
         payload.put_u16(original.keep_alive);
         encode_string(&original.client_id, &mut payload);
-        
+
         encode_remaining_length(payload.len() as u32, &mut buf);
         buf.extend_from_slice(&payload);
 
         // Decode and verify
         let mut cursor = std::io::Cursor::new(buf.as_ref());
         let packet = Packet::decode(&mut cursor).await.unwrap();
-        
+
         match packet {
             Packet::Connect(decoded) => {
                 assert_eq!(decoded.protocol_name, original.protocol_name);
@@ -513,7 +521,7 @@ mod tests {
         // Manually encode CONNECT packet with Will
         let mut buf = BytesMut::new();
         buf.put_u8(0x10); // CONNECT packet type
-        
+
         let mut payload = BytesMut::new();
         encode_string(&original.protocol_name, &mut payload);
         payload.put_u8(original.protocol_level);
@@ -521,19 +529,19 @@ mod tests {
         payload.put_u8(0x2C); // 00101100
         payload.put_u16(original.keep_alive);
         encode_string(&original.client_id, &mut payload);
-        
+
         // Will topic and payload
         encode_string(original.will_topic.as_ref().unwrap(), &mut payload);
         payload.put_u16(original.will_payload.as_ref().unwrap().len() as u16);
         payload.put_slice(original.will_payload.as_ref().unwrap());
-        
+
         encode_remaining_length(payload.len() as u32, &mut buf);
         buf.extend_from_slice(&payload);
 
         // Decode and verify
         let mut cursor = std::io::Cursor::new(buf.as_ref());
         let packet = Packet::decode(&mut cursor).await.unwrap();
-        
+
         match packet {
             Packet::Connect(decoded) => {
                 assert_eq!(decoded.protocol_name, original.protocol_name);
@@ -631,9 +639,7 @@ mod tests {
 
     #[test]
     fn test_puback_packet_encode() {
-        let packet = PubAckPacket {
-            packet_id: 12345,
-        };
+        let packet = PubAckPacket { packet_id: 12345 };
 
         let mut buf = BytesMut::new();
         encode_puback(&packet, &mut buf);
@@ -657,21 +663,21 @@ mod tests {
         // Manually encode SUBSCRIBE packet
         let mut buf = BytesMut::new();
         buf.put_u8(0x82); // SUBSCRIBE packet type with required flags
-        
+
         let mut payload = BytesMut::new();
         payload.put_u16(original.packet_id);
         for (topic, qos) in &original.topic_filters {
             encode_string(topic, &mut payload);
             payload.put_u8(*qos as u8);
         }
-        
+
         encode_remaining_length(payload.len() as u32, &mut buf);
         buf.extend_from_slice(&payload);
 
         // Decode
         let mut cursor = std::io::Cursor::new(buf.as_ref());
         let packet = Packet::decode(&mut cursor).await.unwrap();
-        
+
         match packet {
             Packet::Subscribe(decoded) => {
                 assert_eq!(decoded.packet_id, original.packet_id);
@@ -715,20 +721,20 @@ mod tests {
         // Manually encode UNSUBSCRIBE packet
         let mut buf = BytesMut::new();
         buf.put_u8(0xA2); // UNSUBSCRIBE packet type with required flags
-        
+
         let mut payload = BytesMut::new();
         payload.put_u16(original.packet_id);
         for topic in &original.topic_filters {
             encode_string(topic, &mut payload);
         }
-        
+
         encode_remaining_length(payload.len() as u32, &mut buf);
         buf.extend_from_slice(&payload);
 
         // Decode
         let mut cursor = std::io::Cursor::new(buf.as_ref());
         let packet = Packet::decode(&mut cursor).await.unwrap();
-        
+
         match packet {
             Packet::Unsubscribe(decoded) => {
                 assert_eq!(decoded.packet_id, original.packet_id);
@@ -740,9 +746,7 @@ mod tests {
 
     #[test]
     fn test_unsuback_packet_encode() {
-        let packet = UnsubAckPacket {
-            packet_id: 200,
-        };
+        let packet = UnsubAckPacket { packet_id: 200 };
 
         let mut buf = BytesMut::new();
         encode_unsuback(&packet, &mut buf);
@@ -760,9 +764,9 @@ mod tests {
 
         let mut cursor = std::io::Cursor::new(buf.as_ref());
         let packet = Packet::decode(&mut cursor).await.unwrap();
-        
+
         match packet {
-            Packet::PingReq => {}, // Success
+            Packet::PingReq => {} // Success
             _ => panic!("Expected PINGREQ packet"),
         }
     }
@@ -784,9 +788,9 @@ mod tests {
 
         let mut cursor = std::io::Cursor::new(buf.as_ref());
         let packet = Packet::decode(&mut cursor).await.unwrap();
-        
+
         match packet {
-            Packet::Disconnect => {}, // Success
+            Packet::Disconnect => {} // Success
             _ => panic!("Expected DISCONNECT packet"),
         }
     }
@@ -858,13 +862,13 @@ mod tests {
             "MQTT",
             "Hello, World!",
             "测试中文", // Test UTF-8
-            "🚀🔥💻", // Test emojis
+            "🚀🔥💻",   // Test emojis
         ];
 
         for s in test_strings {
             let mut buf = BytesMut::new();
             encode_string(s, &mut buf);
-            
+
             let mut cursor = Cursor::new(buf.as_ref());
             let decoded = decode_string(&mut cursor).unwrap();
             assert_eq!(decoded, s);
@@ -930,7 +934,11 @@ mod tests {
         for (dup, qos, retain, expected_flags) in test_cases {
             let packet = PublishPacket {
                 topic: "test".to_string(),
-                packet_id: if matches!(qos, QoS::AtMostOnce) { None } else { Some(1) },
+                packet_id: if matches!(qos, QoS::AtMostOnce) {
+                    None
+                } else {
+                    Some(1)
+                },
                 payload: Bytes::from("test"),
                 qos,
                 retain,
@@ -939,8 +947,11 @@ mod tests {
 
             let mut buf = BytesMut::new();
             encode_publish(&packet, &mut buf);
-            assert_eq!(buf[0], expected_flags, 
-                "Failed for dup={}, qos={:?}, retain={}", dup, qos, retain);
+            assert_eq!(
+                buf[0], expected_flags,
+                "Failed for dup={}, qos={:?}, retain={}",
+                dup, qos, retain
+            );
         }
     }
 }

@@ -116,9 +116,11 @@ Sessions represent individual client connections with a sophisticated state mach
 - **Stream deadlock prevention**: Handlers receive stream references
 - **Keep-alive monitoring**: Automatic timeout detection
 - **Will message handling**: Storage and automatic publishing
-- **QoS=1 support**: Multiple in-flight messages with retransmission
+- **QoS=1 support**: Full "at least once" delivery with retransmission
 - **Direct response pattern**: Handlers write directly to client for lower latency
-- **Packet ID generation**: Sequential with wrap-around
+- **Packet ID management**: Sequential generation with wrap-around (1-65535)
+- **In-flight message tracking**: VecDeque for efficient retransmission queue
+- **DUP flag handling**: Proper duplicate detection and prevention
 
 ```rust
 pub struct Runtime {
@@ -200,6 +202,33 @@ Implements MQTT v3.1.1 packet encoding/decoding:
 
 ## Message Flow
 
+### QoS=1 Message Flow
+```
+Publisher       Session         Router          Subscriber      Session
+  |               |               |                 |              |
+  |-- PUBLISH --> |               |                 |              |
+  |               |-- Route ----> |                 |              |
+  |               |               |-- Deliver ----> |              |
+  |               |               |                 |-- PUBLISH -->|
+  |<-- PUBACK --- |               |                 |              |
+  |               |               |                 |<-- PUBACK ---|
+```
+
+### QoS=1 Retransmission Flow
+```
+Publisher       Session         Timer           Subscriber
+  |               |               |                 |
+  |-- PUBLISH --> |               |                 |
+  |               |-- Store ----> |                 |
+  |               |               |                 |-- PUBLISH -->
+  |               |               |                 |  (no PUBACK)
+  |               |<-- Timeout -- |                 |
+  |               |               |                 |-- PUBLISH -->
+  |               |               |                 |    (DUP=1)
+  |<-- PUBACK --- |<---------------------------------- PUBACK ---|
+  |               |-- Remove ---> |                 |
+```
+
 ### Connection Establishment
 ```
 Client          Session         Broker          Router
@@ -272,8 +301,10 @@ To prevent deadlocks, locks are acquired in a consistent order:
 - Zero-copy message routing
 - Efficient topic matching algorithms
 - Configurable buffer sizes
-- Multiple in-flight QoS=1 messages
-- VecDeque for efficient retransmission queue
+- Multiple concurrent in-flight QoS=1 messages
+- VecDeque for O(1) queue operations
+- Efficient packet ID recycling (1-65535)
+- Configurable retransmission intervals
 
 ### CPU Efficiency
 - Lock-free operations where possible
@@ -314,14 +345,17 @@ To prevent deadlocks, locks are acquired in a consistent order:
 - Will message delivery
 - Protocol compliance validation
 
-### QoS=1 Specific Tests
-- Basic PUBLISH/PUBACK flow
-- Message retransmission with DUP flag
-- Duplicate detection and prevention
-- Maximum retry limits
-- Multiple publishers/subscribers
-- QoS downgrade scenarios
-- Message tracking
+### QoS=1 Specific Tests (10+ tests)
+- Basic PUBLISH/PUBACK flow validation
+- Message retransmission with DUP flag on timeout
+- Duplicate detection preventing re-routing
+- Maximum retry limit enforcement
+- Multiple concurrent publishers/subscribers
+- QoS downgrade scenarios (min of publish/subscribe QoS)
+- In-flight message tracking and cleanup
+- Packet ID assignment and acknowledgment
+- Message ordering with multiple in-flight
+- Performance under high QoS=1 load
 
 ### Performance Tests
 - Throughput benchmarks
@@ -333,16 +367,10 @@ To prevent deadlocks, locks are acquired in a consistent order:
 ### Runtime Configuration
 ```toml
 [server]
-listen_addresses = ["tcp://0.0.0.0:1883"]
-max_connections = 10000
-max_packet_size = 1048576
-
-[session]
-keep_alive_timeout_secs = 90
-session_timeout_secs = 300
-
-[router]
+address = "0.0.0.0:1883"
 retained_message_limit = 10000
+max_retransmission_limit = 10
+retransmission_interval_ms = 5000  # 5 seconds
 ```
 
 ### Compile-time Configuration

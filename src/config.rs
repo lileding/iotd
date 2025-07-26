@@ -14,8 +14,6 @@ pub struct ServerConfig {
     pub retransmission_interval_ms: u64,
 }
 
-
-
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -37,7 +35,6 @@ impl ServerConfig {
         }
     }
 }
-
 
 impl Config {
     pub fn retransmission_interval(&self) -> Duration {

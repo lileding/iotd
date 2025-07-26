@@ -1,8 +1,8 @@
-use crate::protocol::packet::{QoS, PublishPacket};
-use crate::protocol::v3::subscribe_return_codes::{MAXIMUM_QOS_0, FAILURE};
+use crate::protocol::packet::{PublishPacket, QoS};
+use crate::protocol::v3::subscribe_return_codes::{FAILURE, MAXIMUM_QOS_0};
 use crate::protocol::Packet;
 use crate::session::Mailbox;
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -66,10 +66,9 @@ impl Router {
         let levels: Vec<&str> = filter.split('/').collect();
         for (i, level) in levels.iter().enumerate() {
             // Multi-level wildcard # must be last character
-            if level.contains('#')
-                && (*level != "#" || i != levels.len() - 1) {
-                    return false;
-                }
+            if level.contains('#') && (*level != "#" || i != levels.len() - 1) {
+                return false;
+            }
             // Single-level wildcard + must be whole level
             if level.contains('+') && *level != "+" {
                 return false;
@@ -79,12 +78,21 @@ impl Router {
         true
     }
 
-    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &[(String, QoS)]) -> (Vec<u8>, Vec<PublishPacket>) {
-        info!("Session {} subscribing to {} topics", session_id, topic_filters.len());
+    pub async fn subscribe(
+        &self,
+        session_id: &str,
+        sender: Mailbox,
+        topic_filters: &[(String, QoS)],
+    ) -> (Vec<u8>, Vec<PublishPacket>) {
+        info!(
+            "Session {} subscribing to {} topics",
+            session_id,
+            topic_filters.len()
+        );
 
         let mut return_codes = Vec::new();
         let mut retained_to_send = Vec::new();
-        
+
         {
             let mut router = self.data.write().await;
 
@@ -97,21 +105,30 @@ impl Router {
                 }
 
                 // Store filters -> (session_id -> (sender, qos))
-                router.filters.entry(filter.0.to_string()).or_insert(HashMap::new())
+                router
+                    .filters
+                    .entry(filter.0.to_string())
+                    .or_insert(HashMap::new())
                     .insert(session_id.to_owned(), (sender.clone(), filter.1));
                 // Store session_id -> filter
-                router.sessions.entry(session_id.to_owned()).or_insert(HashSet::new())
+                router
+                    .sessions
+                    .entry(session_id.to_owned())
+                    .or_insert(HashSet::new())
                     .insert(filter.0.to_owned());
-                
+
                 // Grant the requested QoS level (server supports QoS 0 and 1)
                 let granted_qos = match filter.1 {
-                    QoS::AtMostOnce => MAXIMUM_QOS_0,     // 0x00
-                    QoS::AtLeastOnce => 0x01,             // Grant QoS 1
-                    QoS::ExactlyOnce => 0x01,             // Downgrade QoS 2 to 1 (not supported yet)
+                    QoS::AtMostOnce => MAXIMUM_QOS_0, // 0x00
+                    QoS::AtLeastOnce => 0x01,         // Grant QoS 1
+                    QoS::ExactlyOnce => 0x01,         // Downgrade QoS 2 to 1 (not supported yet)
                 };
                 return_codes.push(granted_qos);
-                info!("SUBSCRIBE session_id: {}, filter: {}, granted_qos: {}", session_id, filter.0, granted_qos);
-                
+                info!(
+                    "SUBSCRIBE session_id: {}, filter: {}, granted_qos: {}",
+                    session_id, filter.0, granted_qos
+                );
+
                 // Find retained messages matching this subscription
                 for (topic, retained_packet) in router.retained_messages.iter() {
                     if Self::topic_matches(topic, &filter.0) {
@@ -124,7 +141,7 @@ impl Router {
                             (QoS::ExactlyOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
                             (QoS::ExactlyOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce, // We don't support QoS=2 yet
                         };
-                        
+
                         let mut packet = retained_packet.clone();
                         // Retained messages should be sent with retain flag set to true
                         packet.retain = true;
@@ -141,7 +158,11 @@ impl Router {
     }
 
     pub async fn unsubscribe(&self, session_id: &str, topic_filters: &[String]) {
-        info!("Session {} unsubscribing to {} topics", session_id, topic_filters.len());
+        info!(
+            "Session {} unsubscribing to {} topics",
+            session_id,
+            topic_filters.len()
+        );
         let mut router = self.data.write().await;
 
         for filter in topic_filters.iter() {
@@ -176,25 +197,36 @@ impl Router {
         // Handle retained message storage
         if packet.retain {
             let mut router = self.data.write().await;
-            
+
             if packet.payload.is_empty() {
                 // Empty payload with retain=true means delete the retained message
                 router.retained_messages.remove(&packet.topic);
                 info!("Deleted retained message for topic: {}", packet.topic);
             } else {
                 // Check if we're at the limit and this is a new topic
-                if !router.retained_messages.contains_key(&packet.topic) 
-                    && router.retained_messages.len() >= self.retained_message_limit {
-                    info!("Retained message limit reached ({}/{}), dropping message for topic: {}", 
-                          router.retained_messages.len(), self.retained_message_limit, packet.topic);
+                if !router.retained_messages.contains_key(&packet.topic)
+                    && router.retained_messages.len() >= self.retained_message_limit
+                {
+                    info!(
+                        "Retained message limit reached ({}/{}), dropping message for topic: {}",
+                        router.retained_messages.len(),
+                        self.retained_message_limit,
+                        packet.topic
+                    );
                 } else {
                     // Store the retained message
-                    router.retained_messages.insert(packet.topic.clone(), packet.clone());
-                    info!("Stored retained message for topic: {} (total: {}/{})", 
-                          packet.topic, router.retained_messages.len(), self.retained_message_limit);
+                    router
+                        .retained_messages
+                        .insert(packet.topic.clone(), packet.clone());
+                    info!(
+                        "Stored retained message for topic: {} (total: {}/{})",
+                        packet.topic,
+                        router.retained_messages.len(),
+                        self.retained_message_limit
+                    );
                 }
             }
-            
+
             // Continue to route to current subscribers
             drop(router);
         }
@@ -214,24 +246,32 @@ impl Router {
                         (QoS::ExactlyOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
                         (QoS::ExactlyOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce, // We don't support QoS=2 yet
                     };
-                    
+
                     // Create a packet for forwarding with appropriate QoS
                     // - Retain flag should be false when forwarding to existing subscribers
                     // - Packet ID should be None - each session will assign its own
                     let forward_packet = PublishPacket {
                         topic: packet.topic.clone(),
-                        packet_id: None,  // Session will assign its own packet ID for QoS > 0
+                        packet_id: None, // Session will assign its own packet ID for QoS > 0
                         payload: packet.payload.clone(),
                         qos: effective_qos,
-                        retain: false,  // Always false when forwarding to existing subscribers
-                        dup: false,  // Not a duplicate when initially forwarding
+                        retain: false, // Always false when forwarding to existing subscribers
+                        dup: false,    // Not a duplicate when initially forwarding
                     };
-                    
-                    info!("ROUTE topic:{} session_id:{} pub_qos:{:?} sub_qos:{:?} effective_qos:{:?}", 
-                          packet.topic, session_id, packet.qos, subscription_qos, effective_qos);
-                    sender.send(Packet::Publish(forward_packet)).await.unwrap_or_else(|e| {
-                        info!("Route topic {} to session {} error: {}", packet.topic, session_id, e);
-                    });
+
+                    info!(
+                        "ROUTE topic:{} session_id:{} pub_qos:{:?} sub_qos:{:?} effective_qos:{:?}",
+                        packet.topic, session_id, packet.qos, subscription_qos, effective_qos
+                    );
+                    sender
+                        .send(Packet::Publish(forward_packet))
+                        .await
+                        .unwrap_or_else(|e| {
+                            info!(
+                                "Route topic {} to session {} error: {}",
+                                packet.topic, session_id, e
+                            );
+                        });
                 }
             }
         }
@@ -249,7 +289,12 @@ impl Router {
         Self::match_parts(&topic_parts, &filter_parts, 0, 0)
     }
 
-    fn match_parts(topic_parts: &[&str], filter_parts: &[&str], topic_idx: usize, filter_idx: usize) -> bool {
+    fn match_parts(
+        topic_parts: &[&str],
+        filter_parts: &[&str],
+        topic_idx: usize,
+        filter_idx: usize,
+    ) -> bool {
         // If we've consumed all filter parts
         if filter_idx >= filter_parts.len() {
             return topic_idx >= topic_parts.len();
@@ -269,7 +314,7 @@ impl Router {
                 // Multi-level wildcard - matches everything remaining
                 // Must be the last part of the filter
                 filter_idx == filter_parts.len() - 1
-            },
+            }
             "+" => {
                 // Single-level wildcard - matches exactly one level
                 // + should not match empty levels
@@ -278,7 +323,7 @@ impl Router {
                 } else {
                     Self::match_parts(topic_parts, filter_parts, topic_idx + 1, filter_idx + 1)
                 }
-            },
+            }
             _ => {
                 // Literal match
                 if topic_part == filter_part {
@@ -297,16 +342,28 @@ mod tests {
 
     #[test]
     fn test_exact_match() {
-        assert!(Router::topic_matches("home/kitchen/temperature", "home/kitchen/temperature"));
+        assert!(Router::topic_matches(
+            "home/kitchen/temperature",
+            "home/kitchen/temperature"
+        ));
         assert!(Router::topic_matches("a", "a"));
         assert!(Router::topic_matches("", ""));
     }
 
     #[test]
     fn test_exact_mismatch() {
-        assert!(!Router::topic_matches("home/kitchen/temperature", "home/kitchen/humidity"));
-        assert!(!Router::topic_matches("home/kitchen", "home/kitchen/temperature"));
-        assert!(!Router::topic_matches("home/kitchen/temperature", "home/kitchen"));
+        assert!(!Router::topic_matches(
+            "home/kitchen/temperature",
+            "home/kitchen/humidity"
+        ));
+        assert!(!Router::topic_matches(
+            "home/kitchen",
+            "home/kitchen/temperature"
+        ));
+        assert!(!Router::topic_matches(
+            "home/kitchen/temperature",
+            "home/kitchen"
+        ));
         assert!(!Router::topic_matches("abc", "xyz"));
         assert!(!Router::topic_matches("a", ""));
         assert!(!Router::topic_matches("", "a"));
@@ -315,35 +372,68 @@ mod tests {
     #[test]
     fn test_single_level_wildcard_plus() {
         // Basic + wildcard tests
-        assert!(Router::topic_matches("home/kitchen/temperature", "home/+/temperature"));
-        assert!(Router::topic_matches("home/bedroom/temperature", "home/+/temperature"));
-        assert!(Router::topic_matches("home/livingroom/temperature", "home/+/temperature"));
+        assert!(Router::topic_matches(
+            "home/kitchen/temperature",
+            "home/+/temperature"
+        ));
+        assert!(Router::topic_matches(
+            "home/bedroom/temperature",
+            "home/+/temperature"
+        ));
+        assert!(Router::topic_matches(
+            "home/livingroom/temperature",
+            "home/+/temperature"
+        ));
 
         // + at beginning
-        assert!(Router::topic_matches("kitchen/temperature", "+/temperature"));
-        assert!(Router::topic_matches("bedroom/temperature", "+/temperature"));
+        assert!(Router::topic_matches(
+            "kitchen/temperature",
+            "+/temperature"
+        ));
+        assert!(Router::topic_matches(
+            "bedroom/temperature",
+            "+/temperature"
+        ));
 
         // + at end
         assert!(Router::topic_matches("home/kitchen", "home/+"));
         assert!(Router::topic_matches("home/bedroom", "home/+"));
 
         // Multiple + wildcards
-        assert!(Router::topic_matches("home/kitchen/sensor/temperature", "home/+/sensor/+"));
-        assert!(Router::topic_matches("office/meeting/sensor/humidity", "office/+/sensor/+"));
+        assert!(Router::topic_matches(
+            "home/kitchen/sensor/temperature",
+            "home/+/sensor/+"
+        ));
+        assert!(Router::topic_matches(
+            "office/meeting/sensor/humidity",
+            "office/+/sensor/+"
+        ));
 
         // + should not match empty level
-        assert!(!Router::topic_matches("home//temperature", "home/+/temperature"));
-        assert!(!Router::topic_matches("home/temperature", "home/+/temperature"));
+        assert!(!Router::topic_matches(
+            "home//temperature",
+            "home/+/temperature"
+        ));
+        assert!(!Router::topic_matches(
+            "home/temperature",
+            "home/+/temperature"
+        ));
 
         // + should not match multiple levels
-        assert!(!Router::topic_matches("home/kitchen/cabinet/temperature", "home/+/temperature"));
+        assert!(!Router::topic_matches(
+            "home/kitchen/cabinet/temperature",
+            "home/+/temperature"
+        ));
     }
 
     #[test]
     fn test_multi_level_wildcard_hash() {
         // Basic # wildcard tests
         assert!(Router::topic_matches("home/kitchen/temperature", "home/#"));
-        assert!(Router::topic_matches("home/kitchen/sensor/temperature/celsius", "home/#"));
+        assert!(Router::topic_matches(
+            "home/kitchen/sensor/temperature/celsius",
+            "home/#"
+        ));
         assert!(Router::topic_matches("home", "home/#"));
 
         // # at root
@@ -359,19 +449,34 @@ mod tests {
         assert!(Router::topic_matches("", "#"));
 
         // # must be last in filter
-        assert!(Router::topic_matches("home/kitchen/temperature", "home/kitchen/#"));
+        assert!(Router::topic_matches(
+            "home/kitchen/temperature",
+            "home/kitchen/#"
+        ));
     }
 
     #[test]
     fn test_combined_wildcards() {
         // Combining + and # wildcards
-        assert!(Router::topic_matches("home/kitchen/sensor/temperature", "home/+/#"));
-        assert!(Router::topic_matches("home/bedroom/light/brightness", "home/+/#"));
+        assert!(Router::topic_matches(
+            "home/kitchen/sensor/temperature",
+            "home/+/#"
+        ));
+        assert!(Router::topic_matches(
+            "home/bedroom/light/brightness",
+            "home/+/#"
+        ));
         assert!(Router::topic_matches("home/kitchen", "home/+/#"));
 
         // Multiple + before #
-        assert!(Router::topic_matches("building/floor2/room5/sensor/temp", "building/+/+/#"));
-        assert!(Router::topic_matches("building/floor1/room3/light", "building/+/+/#"));
+        assert!(Router::topic_matches(
+            "building/floor2/room5/sensor/temp",
+            "building/+/+/#"
+        ));
+        assert!(Router::topic_matches(
+            "building/floor1/room3/light",
+            "building/+/+/#"
+        ));
 
         // Edge case: + and # together
         assert!(Router::topic_matches("a/b/c/d", "+/+/#"));
@@ -398,9 +503,15 @@ mod tests {
         assert!(Router::topic_matches(&long_topic, "#"));
 
         // Topics with special characters
-        assert!(Router::topic_matches("home/kitchen-sensor/temp_1", "home/+/+"));
+        assert!(Router::topic_matches(
+            "home/kitchen-sensor/temp_1",
+            "home/+/+"
+        ));
         assert!(Router::topic_matches("device@123/status", "+/status"));
-        assert!(Router::topic_matches("sensor.temperature.celsius", "sensor.temperature.celsius"));
+        assert!(Router::topic_matches(
+            "sensor.temperature.celsius",
+            "sensor.temperature.celsius"
+        ));
 
         // Unicode characters
         assert!(Router::topic_matches("家/厨房/温度", "家/+/温度"));
@@ -420,20 +531,38 @@ mod tests {
         // Examples from MQTT specification
 
         // sport/tennis/player1
-        assert!(Router::topic_matches("sport/tennis/player1", "sport/tennis/player1"));
-        assert!(Router::topic_matches("sport/tennis/player1", "sport/tennis/+"));
+        assert!(Router::topic_matches(
+            "sport/tennis/player1",
+            "sport/tennis/player1"
+        ));
+        assert!(Router::topic_matches(
+            "sport/tennis/player1",
+            "sport/tennis/+"
+        ));
         assert!(!Router::topic_matches("sport/tennis/player1", "sport/+"));
-        assert!(Router::topic_matches("sport/tennis/player1", "+/tennis/player1"));
+        assert!(Router::topic_matches(
+            "sport/tennis/player1",
+            "+/tennis/player1"
+        ));
         assert!(!Router::topic_matches("sport/tennis/player1", "+/+"));
         assert!(Router::topic_matches("sport/tennis/player1", "+/+/+"));
         assert!(Router::topic_matches("sport/tennis/player1", "#"));
         assert!(Router::topic_matches("sport/tennis/player1", "sport/#"));
-        assert!(Router::topic_matches("sport/tennis/player1", "sport/tennis/#"));
+        assert!(Router::topic_matches(
+            "sport/tennis/player1",
+            "sport/tennis/#"
+        ));
 
         // These should NOT match
-        assert!(!Router::topic_matches("sport/tennis/player1", "sport/tennis"));
+        assert!(!Router::topic_matches(
+            "sport/tennis/player1",
+            "sport/tennis"
+        ));
         assert!(!Router::topic_matches("sport/tennis/player1", "tennis"));
-        assert!(!Router::topic_matches("sport/tennis/player1", "sport/tennis/player1/ranking"));
+        assert!(!Router::topic_matches(
+            "sport/tennis/player1",
+            "sport/tennis/player1/ranking"
+        ));
         assert!(!Router::topic_matches("sport/tennis/player1", "+"));
         assert!(!Router::topic_matches("sport/tennis/player1", "+/+"));
 
@@ -455,14 +584,17 @@ mod tests {
     #[test]
     fn test_stress_patterns() {
         // Deeply nested topics
-        let deep_topic = (0..50).map(|i| format!("level{i}")).collect::<Vec<_>>().join("/");
+        let deep_topic = (0..50)
+            .map(|i| format!("level{i}"))
+            .collect::<Vec<_>>()
+            .join("/");
         let deep_plus_filter = (0..50).map(|_| "+").collect::<Vec<_>>().join("/");
         assert!(Router::topic_matches(&deep_topic, &deep_plus_filter));
         assert!(Router::topic_matches(&deep_topic, "#"));
 
         // Many consecutive slashes
         assert!(!Router::topic_matches("a///b", "a/+/+/b")); // + should not match empty levels
-        assert!(!Router::topic_matches("a//", "a/+/+")); // + should not match empty levels  
+        assert!(!Router::topic_matches("a//", "a/+/+")); // + should not match empty levels
         assert!(!Router::topic_matches("//a", "+/+/a")); // + should not match empty levels
 
         // Mixed wildcards stress test
@@ -508,7 +640,7 @@ mod tests {
         assert!(Router::is_valid_topic_name("测试")); // UTF-8
         assert!(Router::is_valid_topic_name("🚀")); // Emoji
         assert!(Router::is_valid_topic_name("home/kitchen/temperature/°C"));
-        
+
         // Topics can contain wildcards when publishing (they're just literal characters)
         assert!(Router::is_valid_topic_name("home/+/temp"));
         assert!(Router::is_valid_topic_name("home/#"));
@@ -518,7 +650,7 @@ mod tests {
     fn test_invalid_topic_names() {
         // Empty topic
         assert!(!Router::is_valid_topic_name(""));
-        
+
         // Contains null character
         assert!(!Router::is_valid_topic_name("home\0temperature"));
         assert!(!Router::is_valid_topic_name("\0"));
@@ -533,21 +665,21 @@ mod tests {
         assert!(Router::is_valid_topic_filter("/"));
         assert!(Router::is_valid_topic_filter("home/"));
         assert!(Router::is_valid_topic_filter("/home"));
-        
+
         // Valid single-level wildcards
         assert!(Router::is_valid_topic_filter("+"));
         assert!(Router::is_valid_topic_filter("home/+/temperature"));
         assert!(Router::is_valid_topic_filter("+/+/+"));
         assert!(Router::is_valid_topic_filter("home/+"));
         assert!(Router::is_valid_topic_filter("+/temperature"));
-        
+
         // Valid multi-level wildcards
         assert!(Router::is_valid_topic_filter("#"));
         assert!(Router::is_valid_topic_filter("home/#"));
         assert!(Router::is_valid_topic_filter("home/kitchen/#"));
         assert!(Router::is_valid_topic_filter("+/#"));
         assert!(Router::is_valid_topic_filter("+/+/#"));
-        
+
         // UTF-8 is valid
         assert!(Router::is_valid_topic_filter("测试/+/#"));
         assert!(Router::is_valid_topic_filter("🚀/#"));
@@ -557,18 +689,18 @@ mod tests {
     fn test_invalid_topic_filters() {
         // Empty filter
         assert!(!Router::is_valid_topic_filter(""));
-        
+
         // Contains null character
         assert!(!Router::is_valid_topic_filter("home\0temperature"));
         assert!(!Router::is_valid_topic_filter("\0"));
         assert!(!Router::is_valid_topic_filter("home/\0/temp"));
-        
+
         // Invalid single-level wildcard usage
         assert!(!Router::is_valid_topic_filter("home/+a/temp")); // + not alone
         assert!(!Router::is_valid_topic_filter("home/a+/temp")); // + not alone
         assert!(!Router::is_valid_topic_filter("home/++/temp")); // + not alone
         assert!(!Router::is_valid_topic_filter("home/+abc/temp")); // + not alone
-        
+
         // Invalid multi-level wildcard usage
         assert!(!Router::is_valid_topic_filter("home/#/temp")); // # must be last
         assert!(!Router::is_valid_topic_filter("home/a#")); // # not alone
@@ -587,18 +719,18 @@ mod tests {
         assert!(Router::is_valid_topic_filter("/"));
         assert!(Router::is_valid_topic_filter("//"));
         assert!(Router::is_valid_topic_filter("///"));
-        
+
         // Wildcards at boundaries
         assert!(Router::is_valid_topic_filter("/+"));
         assert!(Router::is_valid_topic_filter("+/"));
         assert!(Router::is_valid_topic_filter("/+/"));
         assert!(Router::is_valid_topic_filter("/#"));
         assert!(Router::is_valid_topic_filter("/+/#"));
-        
+
         // Multiple # in different levels (still invalid)
         assert!(!Router::is_valid_topic_filter("#/#"));
         assert!(!Router::is_valid_topic_filter("home/#/#"));
-        
+
         // Mixed valid and invalid patterns
         assert!(Router::is_valid_topic_filter("home/+/kitchen/+/sensor"));
         assert!(!Router::is_valid_topic_filter("home/+/kitchen/#/sensor"));

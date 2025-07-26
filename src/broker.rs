@@ -1,13 +1,13 @@
-use crate::protocol::packet::{QoS, PublishPacket};
-use crate::session::{Mailbox, Session, TakeoverAction};
-use crate::router::Router;
-use crate::transport::AsyncStream;
 use crate::config::Config;
-use dashmap::{DashMap, mapref::entry::Entry};
+use crate::protocol::packet::{PublishPacket, QoS};
+use crate::router::Router;
+use crate::session::{Mailbox, Session, TakeoverAction};
+use crate::transport::AsyncStream;
+use dashmap::{mapref::entry::Entry, DashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::collections::HashMap;
-use tracing::{info, error};
+use tracing::{error, info};
 
 pub struct Broker {
     sessions: Mutex<HashMap<String, Session>>,
@@ -31,10 +31,7 @@ impl Broker {
         // Lock the sessions
         let mut sessions = self.sessions.lock().await;
 
-        let session = Session::spawn(
-            Arc::clone(self),
-            stream,
-        ).await;
+        let session = Session::spawn(Arc::clone(self), stream).await;
 
         info!("Added session {} to broker", session.id());
         sessions.insert(session.id().to_owned(), session);
@@ -45,7 +42,7 @@ impl Broker {
     }
 
     pub async fn clean_all_sessions(&self) {
-        // Lock the sessions 
+        // Lock the sessions
         let mut sessions = self.sessions.lock().await;
 
         self.named_clients.clear();
@@ -69,11 +66,13 @@ impl Broker {
         info!("All sessions cleaned");
     }
 
-    pub async fn has_collision(&self, client_id: &str, action: TakeoverAction) -> Option<TakeoverAction> {
+    pub async fn has_collision(
+        &self,
+        client_id: &str,
+        action: TakeoverAction,
+    ) -> Option<TakeoverAction> {
         match self.named_clients.entry(client_id.to_owned()) {
-            Entry::Occupied(entry) => {
-                Some(entry.get().clone())
-            }
+            Entry::Occupied(entry) => Some(entry.get().clone()),
             Entry::Vacant(entry) => {
                 entry.insert(action);
                 None
@@ -92,8 +91,15 @@ impl Broker {
         info!("Removed session {} from broker", session_id.as_ref());
     }
 
-    pub async fn subscribe(&self, session_id: &str, sender: Mailbox, topic_filters: &[(String, QoS)]) -> (Vec<u8>, Vec<PublishPacket>) {
-        self.router.subscribe(session_id, sender, topic_filters).await
+    pub async fn subscribe(
+        &self,
+        session_id: &str,
+        sender: Mailbox,
+        topic_filters: &[(String, QoS)],
+    ) -> (Vec<u8>, Vec<PublishPacket>) {
+        self.router
+            .subscribe(session_id, sender, topic_filters)
+            .await
     }
 
     pub async fn unsubscribe(&self, session_id: &str, topic_filters: &[String]) {
@@ -108,4 +114,3 @@ impl Broker {
         self.router.route(packet).await
     }
 }
-
