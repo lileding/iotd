@@ -3,7 +3,7 @@ use std::process::Command;
 fn main() {
     // Get git revision
     let output = Command::new("git")
-        .args(&["rev-parse", "--short", "HEAD"])
+        .args(["rev-parse", "--short", "HEAD"])
         .output()
         .expect("Failed to execute git command");
     
@@ -14,7 +14,7 @@ fn main() {
     
     // Check if working directory is clean
     let status_output = Command::new("git")
-        .args(&["status", "--porcelain"])
+        .args(["status", "--porcelain"])
         .output()
         .expect("Failed to execute git status");
     
