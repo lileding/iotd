@@ -1,0 +1,22 @@
+# IoTD Example Configuration File
+# 
+# This file demonstrates all available configuration options for IoTD.
+# Copy this file and modify as needed for your deployment.
+
+[server]
+# Listen address for MQTT connections
+# Examples: "127.0.0.1:1883", "0.0.0.0:1883", "[::]:1883"
+address = "0.0.0.0:1883"
+
+# Maximum number of retained messages to store
+# Default: 10000
+retained_message_limit = 10000
+
+# Maximum number of retransmission attempts for QoS=1 messages
+# Default: 10
+max_retransmission_limit = 10
+
+# Interval between retransmission attempts in milliseconds
+# Set to 0 to disable retransmission
+# Default: 5000 (5 seconds)
+retransmission_interval_ms = 5000

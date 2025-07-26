@@ -23,8 +23,8 @@ ARG GIT_REVISION
 ENV GIT_REVISION=${GIT_REVISION}
 RUN cargo build --release
 
-# Runtime stage using busybox
-FROM busybox:latest
+# Minimal
+FROM scratch
 
 # Copy the statically linked binary
 COPY --from=builder /app/target/release/iotd /usr/bin/iotd
