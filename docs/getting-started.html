@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Getting Started - IoTD</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav>
+        <div class="nav-container">
+            <div class="logo">
+                <pre>
+    ___     _____     ____  
+   |_ _|___/__   \   |  _ \ 
+    | |/ _ \ / /\ /  | | | |
+    | | (_) / /  \ \ | |_| |
+   |___\___/\/    \_\|____/ 
+                </pre>
+            </div>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="features.html">Features</a></li>
+                <li><a href="getting-started.html" class="active">Getting Started</a></li>
+                <li><a href="documentation.html">Documentation</a></li>
+                <li><a href="roadmap.html">Roadmap</a></li>
+                <li><a href="https://github.com/lileding/iotd">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="content-page">
+        <div class="container">
+            <h1>Getting Started</h1>
+            
+            <h2>Installation</h2>
+            
+            <h3>Download Pre-built Binary</h3>
+            <p>The easiest way to get started is to download the pre-built binary from our releases page:</p>
+            <div class="code-block">
+                <pre># Download the latest release
+wget https://github.com/lileding/iotd/releases/download/v0.2.0/iotd-linux-x86_64.tar.gz
+
+# Extract the archive
+tar -xzf iotd-linux-x86_64.tar.gz
+
+# Make it executable (if needed)
+chmod +x iotd-linux-x86_64
+
+# Move to system path (optional)
+sudo mv iotd-linux-x86_64 /usr/local/bin/iotd</pre>
+            </div>
+
+            <h3>Build from Source</h3>
+            <p>If you prefer to build from source, you'll need Rust installed:</p>
+            <div class="code-block">
+                <pre># Clone the repository
+git clone https://github.com/lileding/iotd.git
+cd iotd
+
+# Build release binary
+cargo build --release
+
+# The binary will be at target/release/iotd</pre>
+            </div>
+
+            <h3>Using Docker</h3>
+            <p>IoTD is also available as a minimal Docker image:</p>
+            <div class="code-block">
+                <pre># Build the Docker image
+docker build -t iotd .
+
+# Run the container
+docker run -p 1883:1883 iotd</pre>
+            </div>
+
+            <h2>Basic Usage</h2>
+            
+            <h3>Starting the Server</h3>
+            <p>Run IoTD with default settings (listens on 127.0.0.1:1883):</p>
+            <div class="code-block">
+                <pre>iotd</pre>
+            </div>
+
+            <p>To listen on all interfaces:</p>
+            <div class="code-block">
+                <pre>iotd -l 0.0.0.0:1883</pre>
+            </div>
+
+            <p>To use IPv6:</p>
+            <div class="code-block">
+                <pre>iotd -l [::]:1883</pre>
+            </div>
+
+            <h3>Configuration File</h3>
+            <p>Create a configuration file (config.toml) for more control:</p>
+            <div class="code-block">
+                <pre>[server]
+# Listen address for MQTT connections
+address = "0.0.0.0:1883"
+
+# Maximum number of retained messages
+retained_message_limit = 10000
+
+# QoS=1 retransmission settings
+max_retransmission_limit = 10
+retransmission_interval_ms = 5000</pre>
+            </div>
+
+            <p>Run with configuration file:</p>
+            <div class="code-block">
+                <pre>iotd -c config.toml</pre>
+            </div>
+
+            <h2>Testing Your Installation</h2>
+            
+            <h3>Using Mosquitto Clients</h3>
+            <p>Test with mosquitto_pub and mosquitto_sub:</p>
+            <div class="code-block">
+                <pre># In terminal 1 - Subscribe to a topic
+mosquitto_sub -h localhost -t "test/topic"
+
+# In terminal 2 - Publish a message
+mosquitto_pub -h localhost -t "test/topic" -m "Hello, IoTD!"</pre>
+            </div>
+
+            <h3>Using MQTTX CLI</h3>
+            <p>Alternative testing with mqttx:</p>
+            <div class="code-block">
+                <pre># Subscribe
+mqttx sub -h localhost -t "test/+"
+
+# Publish
+mqttx pub -h localhost -t "test/sensor" -m '{"temperature": 25.5}'</pre>
+            </div>
+
+            <h2>Environment Variables</h2>
+            <p>IoTD supports the following environment variables:</p>
+            <ul>
+                <li><code>RUST_LOG</code> - Set log level (error, warn, info, debug, trace)</li>
+            </ul>
+            
+            <div class="code-block">
+                <pre># Run with debug logging
+RUST_LOG=debug iotd
+
+# Run with only error logs
+RUST_LOG=error iotd</pre>
+            </div>
+
+            <h2>Command Line Options</h2>
+            <div class="code-block">
+                <pre>USAGE:
+    iotd [OPTIONS]
+
+OPTIONS:
+    -h, --help              Print help information
+    -v, --version           Print version information
+    -l, --listen ADDRESS    Listen address (default: 127.0.0.1:1883)
+    -c, --config FILE       Load configuration from TOML file</pre>
+            </div>
+
+            <h2>Next Steps</h2>
+            <p>Now that you have IoTD running, you can:</p>
+            <ul>
+                <li>Read the <a href="documentation.html">full documentation</a></li>
+                <li>Explore <a href="features.html">available features</a></li>
+                <li>Check the <a href="roadmap.html">roadmap</a> for upcoming features</li>
+                <li>Contribute on <a href="https://github.com/lileding/iotd">GitHub</a></li>
+            </ul>
+        </div>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 IoTD Project. Licensed under MIT.</p>
+            <p>Built with ❤️ using Rust</p>
+        </div>
+    </footer>
+</body>
+</html>

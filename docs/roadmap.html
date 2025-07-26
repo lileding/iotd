@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Roadmap - IoTD</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav>
+        <div class="nav-container">
+            <div class="logo">
+                <pre>
+    ___     _____     ____  
+   |_ _|___/__   \   |  _ \ 
+    | |/ _ \ / /\ /  | | | |
+    | | (_) / /  \ \ | |_| |
+   |___\___/\/    \_\|____/ 
+                </pre>
+            </div>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="features.html">Features</a></li>
+                <li><a href="getting-started.html">Getting Started</a></li>
+                <li><a href="documentation.html">Documentation</a></li>
+                <li><a href="roadmap.html" class="active">Roadmap</a></li>
+                <li><a href="https://github.com/lileding/iotd">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="content-page">
+        <div class="container">
+            <h1>Development Roadmap</h1>
+            <p>IoTD development follows a progressive milestone approach, building features incrementally while maintaining stability.</p>
+            
+            <h2>Release Timeline</h2>
+            
+            <div class="timeline">
+                <div class="timeline-item completed">
+                    <h3>v0.1.0 - MQTT Foundation <span class="status completed">Completed</span></h3>
+                    <p><strong>Milestone 1: Basic MQTT Server</strong></p>
+                    <ul>
+                        <li>✅ Complete MQTT v3.1.1 protocol support</li>
+                        <li>✅ QoS=0 messaging with routing</li>
+                        <li>✅ Wildcard subscriptions (+ and #)</li>
+                        <li>✅ Retained messages</li>
+                        <li>✅ Will messages (LWT)</li>
+                        <li>✅ Keep-alive mechanism</li>
+                        <li>✅ Clean session support</li>
+                    </ul>
+                </div>
+
+                <div class="timeline-item completed">
+                    <h3>v0.2.0 - Quality of Service <span class="status completed">Completed</span></h3>
+                    <p><strong>Milestone 2: QoS=1 Support</strong></p>
+                    <ul>
+                        <li>✅ At-least-once delivery guarantee</li>
+                        <li>✅ PUBACK acknowledgment handling</li>
+                        <li>✅ Message retransmission with DUP flag</li>
+                        <li>✅ Multiple in-flight messages</li>
+                        <li>✅ Packet ID management</li>
+                        <li>✅ QoS downgrade support</li>
+                        <li>✅ Comprehensive QoS=1 tests</li>
+                    </ul>
+                </div>
+
+                <div class="timeline-item">
+                    <h3>v0.3.0 - Persistence <span class="status planned">Next</span></h3>
+                    <p><strong>Milestone 3: Storage Layer</strong></p>
+                    <ul>
+                        <li>💾 Pluggable storage interface</li>
+                        <li>💾 Session state persistence</li>
+                        <li>💾 In-flight message storage</li>
+                        <li>💾 Retained message persistence</li>
+                        <li>💾 SQLite and file-based backends</li>
+                        <li>💾 Recovery after restart</li>
+                    </ul>
+                </div>
+
+                <div class="timeline-item">
+                    <h3>v0.4.0 - Security <span class="status planned">Planned</span></h3>
+                    <p><strong>Milestone 4: TLS & Authentication</strong></p>
+                    <ul>
+                        <li>🔐 TLS/SSL encryption</li>
+                        <li>🔐 Username/password auth</li>
+                        <li>🔐 Client certificates</li>
+                        <li>🔐 Topic-based ACLs</li>
+                        <li>🔐 Authentication caching</li>
+                    </ul>
+                </div>
+
+                <div class="timeline-item">
+                    <h3>v0.5.0 - QoS=2 <span class="status planned">Planned</span></h3>
+                    <p><strong>Milestone 5: Exactly Once Delivery</strong></p>
+                    <ul>
+                        <li>🎯 QoS=2 implementation</li>
+                        <li>🎯 PUBREC/PUBREL/PUBCOMP flow</li>
+                        <li>🎯 Two-phase commit protocol</li>
+                        <li>🎯 State persistence for QoS=2</li>
+                    </ul>
+                </div>
+
+                <div class="timeline-item">
+                    <h3>v0.6.0 - Observability <span class="status planned">Planned</span></h3>
+                    <p><strong>Milestone 6: Monitoring & Metrics</strong></p>
+                    <ul>
+                        <li>📊 Prometheus metrics export</li>
+                        <li>📊 Grafana dashboard templates</li>
+                        <li>📊 Health check endpoints</li>
+                        <li>📊 Structured logging</li>
+                        <li>📊 Performance metrics</li>
+                    </ul>
+                </div>
+
+                <div class="timeline-item">
+                    <h3>v1.0.0 - Production Ready <span class="status planned">Planned</span></h3>
+                    <p><strong>Milestone 7: Flow Control & Polish</strong></p>
+                    <ul>
+                        <li>🚀 Rate limiting</li>
+                        <li>🚀 WebSocket support</li>
+                        <li>🚀 In-flight window limits</li>
+                        <li>🚀 Production documentation</li>
+                        <li>🚀 Performance optimization</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h2>Future Versions</h2>
+            
+            <h3>v2.0 - MQTT 5.0 Support</h3>
+            <p>Full MQTT 5.0 protocol implementation with:</p>
+            <ul>
+                <li>Enhanced authentication (AUTH packet)</li>
+                <li>Shared subscriptions</li>
+                <li>Message expiry intervals</li>
+                <li>Request/Response pattern</li>
+                <li>User properties</li>
+                <li>Topic aliases</li>
+                <li>Flow control (receive maximum)</li>
+            </ul>
+
+            <h3>v3.0 - Clustering</h3>
+            <p>Horizontal scalability and high availability:</p>
+            <ul>
+                <li>Multi-node clustering</li>
+                <li>Session migration</li>
+                <li>Distributed topic tree</li>
+                <li>Load balancing</li>
+                <li>Failover and recovery</li>
+                <li>Raft consensus</li>
+            </ul>
+
+            <h3>v4.0 - Multi-tenancy</h3>
+            <p>Enterprise features for SaaS deployments:</p>
+            <ul>
+                <li>Tenant isolation</li>
+                <li>Per-tenant quotas</li>
+                <li>Separate authentication</li>
+                <li>Resource monitoring</li>
+                <li>Billing integration</li>
+                <li>Compliance features</li>
+            </ul>
+
+            <h2>Contributing</h2>
+            <p>We welcome contributions! Check our <a href="https://github.com/lileding/iotd/issues">GitHub issues</a> for:</p>
+            <ul>
+                <li>🐛 Bug reports</li>
+                <li>✨ Feature requests</li>
+                <li>📝 Documentation improvements</li>
+                <li>🧪 Test coverage</li>
+                <li>⚡ Performance optimizations</li>
+            </ul>
+
+            <h2>Design Principles</h2>
+            <p>Throughout development, we maintain these core principles:</p>
+            <ul>
+                <li><strong>Correctness First</strong> - MQTT specification compliance</li>
+                <li><strong>Performance Second</strong> - Optimize after correctness</li>
+                <li><strong>Simplicity</strong> - Avoid over-engineering</li>
+                <li><strong>Reliability</strong> - Production-grade quality</li>
+                <li><strong>Testability</strong> - Comprehensive test coverage</li>
+            </ul>
+        </div>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 IoTD Project. Licensed under MIT.</p>
+            <p>Built with ❤️ using Rust</p>
+        </div>
+    </footer>
+</body>
+</html>

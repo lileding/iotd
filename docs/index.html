@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoTD - High-Performance MQTT Daemon</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav>
+        <div class="nav-container">
+            <div class="logo">
+                <pre>
+    ___     _____     ____  
+   |_ _|___/__   \   |  _ \ 
+    | |/ _ \ / /\ /  | | | |
+    | | (_) / /  \ \ | |_| |
+   |___\___/\/    \_\|____/ 
+                </pre>
+            </div>
+            <ul>
+                <li><a href="index.html" class="active">Home</a></li>
+                <li><a href="features.html">Features</a></li>
+                <li><a href="getting-started.html">Getting Started</a></li>
+                <li><a href="documentation.html">Documentation</a></li>
+                <li><a href="roadmap.html">Roadmap</a></li>
+                <li><a href="https://github.com/lileding/iotd">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <div class="hero-content">
+            <h1>IoTD - IoT Daemon</h1>
+            <p class="tagline">High-Performance MQTT Server Built with Rust</p>
+            <p class="description">A modern, async MQTT v3.1.1 server implementation designed for scalability, reliability, and extensibility.</p>
+            <div class="cta-buttons">
+                <a href="getting-started.html" class="btn btn-primary">Get Started</a>
+                <a href="https://github.com/lileding/iotd/releases/latest" class="btn btn-secondary">Download v0.2.0</a>
+            </div>
+        </div>
+    </header>
+
+    <section class="features-overview">
+        <div class="container">
+            <h2>Why IoTD?</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>🚀 High Performance</h3>
+                    <p>Built with Rust and Tokio for maximum performance. Handles thousands of concurrent connections with low latency.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>📊 QoS Support</h3>
+                    <p>Full QoS=0 and QoS=1 support with at-least-once delivery guarantees. QoS=2 coming soon.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🔄 MQTT 3.1.1 Compliant</h3>
+                    <p>Strict adherence to MQTT v3.1.1 specification with comprehensive protocol validation.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🛡️ Reliable</h3>
+                    <p>Race-condition-free architecture with proper session management and clean shutdown.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="quick-start">
+        <div class="container">
+            <h2>Quick Start</h2>
+            <pre><code># Download and extract
+wget https://github.com/lileding/iotd/releases/download/v0.2.0/iotd-linux-x86_64.tar.gz
+tar -xzf iotd-linux-x86_64.tar.gz
+
+# Run the server
+./iotd-linux-x86_64
+
+# Or with custom configuration
+./iotd-linux-x86_64 -c config.toml</code></pre>
+        </div>
+    </section>
+
+    <section class="latest-release">
+        <div class="container">
+            <h2>Latest Release: v0.2.0</h2>
+            <div class="release-info">
+                <h3>QoS=1 Support Complete! 🎉</h3>
+                <ul>
+                    <li>Full at-least-once delivery implementation</li>
+                    <li>Message acknowledgment with PUBACK</li>
+                    <li>Automatic retransmission with DUP flag</li>
+                    <li>Multiple concurrent in-flight messages</li>
+                    <li>85+ comprehensive tests</li>
+                </ul>
+                <a href="https://github.com/lileding/iotd/releases/tag/v0.2.0" class="btn btn-small">View Release Notes</a>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 IoTD Project. Licensed under MIT.</p>
+            <p>Built with ❤️ using Rust</p>
+        </div>
+    </footer>
+</body>
+</html>

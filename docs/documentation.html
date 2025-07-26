@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentation - IoTD</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav>
+        <div class="nav-container">
+            <div class="logo">
+                <pre>
+    ___     _____     ____  
+   |_ _|___/__   \   |  _ \ 
+    | |/ _ \ / /\ /  | | | |
+    | | (_) / /  \ \ | |_| |
+   |___\___/\/    \_\|____/ 
+                </pre>
+            </div>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="features.html">Features</a></li>
+                <li><a href="getting-started.html">Getting Started</a></li>
+                <li><a href="documentation.html" class="active">Documentation</a></li>
+                <li><a href="roadmap.html">Roadmap</a></li>
+                <li><a href="https://github.com/lileding/iotd">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="content-page">
+        <div class="container">
+            <h1>Documentation</h1>
+            
+            <h2>Architecture Overview</h2>
+            <p>IoTD follows a modular, event-driven architecture built on Tokio's async runtime:</p>
+            
+            <h3>Component Hierarchy</h3>
+            <div class="code-block">
+                <pre>Server (Main)
+├── Broker (per transport)
+│   ├── TCP Listener
+│   ├── Session Management
+│   └── Client Registry
+├── Session (per client)
+│   ├── Connection State Machine
+│   ├── Packet Processing
+│   └── Message Queue
+└── Router
+    ├── Topic Subscriptions
+    ├── Message Routing
+    └── Retained Messages</pre>
+            </div>
+
+            <h2>Core Components</h2>
+            
+            <h3>Server</h3>
+            <p>The top-level orchestrator responsible for:</p>
+            <ul>
+                <li>Lifecycle management and startup/shutdown</li>
+                <li>Signal handling (SIGINT, SIGTERM)</li>
+                <li>Broker management</li>
+                <li>Global configuration</li>
+            </ul>
+
+            <h3>Broker</h3>
+            <p>Manages connections for specific transport protocols:</p>
+            <ul>
+                <li>TCP connection acceptance</li>
+                <li>Session creation and tracking</li>
+                <li>Client ID collision detection</li>
+                <li>Named client registry</li>
+            </ul>
+
+            <h3>Session</h3>
+            <p>Represents individual client connections with states:</p>
+            <ul>
+                <li><strong>WaitConnect</strong> - Awaiting CONNECT packet</li>
+                <li><strong>Processing</strong> - Normal operation</li>
+                <li><strong>WaitTakeover</strong> - Persistent session waiting</li>
+                <li><strong>Cleanup</strong> - Resource cleanup</li>
+            </ul>
+
+            <h3>Router</h3>
+            <p>Implements publish/subscribe pattern:</p>
+            <ul>
+                <li>Topic filter matching with wildcards (+ and #)</li>
+                <li>Message routing to subscribers</li>
+                <li>Retained message storage</li>
+                <li>QoS downgrade handling</li>
+            </ul>
+
+            <h2>MQTT Protocol Implementation</h2>
+            
+            <h3>Supported Packet Types</h3>
+            <ul>
+                <li><strong>Control</strong>: CONNECT, CONNACK, DISCONNECT, PINGREQ, PINGRESP</li>
+                <li><strong>Publish</strong>: PUBLISH, PUBACK (QoS=1)</li>
+                <li><strong>Subscribe</strong>: SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK</li>
+            </ul>
+
+            <h3>QoS=1 Message Flow</h3>
+            <div class="code-block">
+                <pre>Publisher → PUBLISH → IoTD → PUBLISH → Subscriber
+    ↑                    ↓         ↓           ↓
+    └──── PUBACK ────────┘         └── PUBACK ─┘</pre>
+            </div>
+
+            <h3>Topic Validation Rules</h3>
+            <ul>
+                <li>Topics must not be empty</li>
+                <li>Topics must not contain null characters</li>
+                <li>Single-level wildcard (+) must occupy entire level</li>
+                <li>Multi-level wildcard (#) must be the last character</li>
+            </ul>
+
+            <h2>Configuration Reference</h2>
+            
+            <h3>Server Configuration</h3>
+            <div class="code-block">
+                <pre>[server]
+# Network address to listen on
+# Format: "ip:port" or "[ipv6]:port"
+address = "0.0.0.0:1883"
+
+# Maximum number of retained messages to store
+# Default: 10000
+retained_message_limit = 10000
+
+# Maximum retransmission attempts for QoS=1
+# Default: 10
+max_retransmission_limit = 10
+
+# Interval between retransmission attempts (milliseconds)
+# Set to 0 to disable retransmission
+# Default: 5000 (5 seconds)
+retransmission_interval_ms = 5000</pre>
+            </div>
+
+            <h2>Development</h2>
+            
+            <h3>Building from Source</h3>
+            <div class="code-block">
+                <pre># Clone repository
+git clone https://github.com/lileding/iotd.git
+cd iotd
+
+# Run tests
+cargo test
+
+# Build debug binary
+cargo build
+
+# Build optimized release binary
+cargo build --release
+
+# Run with logging
+RUST_LOG=debug cargo run</pre>
+            </div>
+
+            <h3>Code Quality</h3>
+            <p>The project uses automated code quality checks:</p>
+            <div class="code-block">
+                <pre># Format code
+cargo fmt
+
+# Run linter
+cargo clippy -- -D warnings
+
+# Install git hooks
+./scripts/install-hooks.sh</pre>
+            </div>
+
+            <h2>Performance Tuning</h2>
+            
+            <h3>System Limits</h3>
+            <p>For high connection counts, adjust system limits:</p>
+            <div class="code-block">
+                <pre># Increase file descriptor limit
+ulimit -n 65536
+
+# For persistent changes, edit /etc/security/limits.conf:
+* soft nofile 65536
+* hard nofile 65536</pre>
+            </div>
+
+            <h3>Logging Performance</h3>
+            <p>In production, reduce logging overhead:</p>
+            <div class="code-block">
+                <pre># Only log errors
+RUST_LOG=error iotd
+
+# Disable logging entirely
+RUST_LOG=off iotd</pre>
+            </div>
+
+            <h2>Troubleshooting</h2>
+            
+            <h3>Common Issues</h3>
+            <ul>
+                <li><strong>Address already in use</strong> - Another process is using port 1883</li>
+                <li><strong>Too many open files</strong> - Increase system file descriptor limits</li>
+                <li><strong>Connection refused</strong> - Check firewall settings and listen address</li>
+            </ul>
+
+            <h3>Debug Logging</h3>
+            <div class="code-block">
+                <pre># Enable all debug logs
+RUST_LOG=debug iotd
+
+# Debug specific module
+RUST_LOG=iotd::session=debug iotd
+
+# Trace level for maximum detail
+RUST_LOG=trace iotd</pre>
+            </div>
+
+            <h2>Additional Resources</h2>
+            <ul>
+                <li><a href="https://github.com/lileding/iotd/blob/main/docs/arch.md">Architecture Documentation</a></li>
+                <li><a href="https://github.com/lileding/iotd/blob/main/BENCHMARKS.md">Performance Benchmarks</a></li>
+                <li><a href="https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html">MQTT v3.1.1 Specification</a></li>
+                <li><a href="https://github.com/lileding/iotd/issues">Issue Tracker</a></li>
+            </ul>
+        </div>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 IoTD Project. Licensed under MIT.</p>
+            <p>Built with ❤️ using Rust</p>
+        </div>
+    </footer>
+</body>
+</html>

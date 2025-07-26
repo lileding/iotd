@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Features - IoTD</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav>
+        <div class="nav-container">
+            <div class="logo">
+                <pre>
+    ___     _____     ____  
+   |_ _|___/__   \   |  _ \ 
+    | |/ _ \ / /\ /  | | | |
+    | | (_) / /  \ \ | |_| |
+   |___\___/\/    \_\|____/ 
+                </pre>
+            </div>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="features.html" class="active">Features</a></li>
+                <li><a href="getting-started.html">Getting Started</a></li>
+                <li><a href="documentation.html">Documentation</a></li>
+                <li><a href="roadmap.html">Roadmap</a></li>
+                <li><a href="https://github.com/lileding/iotd">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="content-page">
+        <div class="container">
+            <h1>Features</h1>
+            
+            <h2>Core MQTT Features</h2>
+            <ul class="feature-list">
+                <li>✅ <strong>MQTT v3.1.1 Protocol Support</strong> - Full implementation of all packet types</li>
+                <li>✅ <strong>QoS=0 (At Most Once)</strong> - Fire-and-forget message delivery</li>
+                <li>✅ <strong>QoS=1 (At Least Once)</strong> - Reliable delivery with acknowledgments</li>
+                <li>🚧 <strong>QoS=2 (Exactly Once)</strong> - Coming in Milestone 5</li>
+                <li>✅ <strong>Wildcard Subscriptions</strong> - Support for + and # wildcards</li>
+                <li>✅ <strong>Retained Messages</strong> - Store and deliver last known good values</li>
+                <li>✅ <strong>Will Messages</strong> - Last Will and Testament support</li>
+                <li>✅ <strong>Keep-Alive</strong> - Automatic client timeout detection</li>
+                <li>✅ <strong>Clean Session</strong> - Session state management</li>
+            </ul>
+
+            <h2>Quality of Service Level 1</h2>
+            <p>Our QoS=1 implementation ensures reliable message delivery with:</p>
+            <ul>
+                <li><strong>Message Acknowledgment</strong> - PUBACK flow for delivery confirmation</li>
+                <li><strong>Automatic Retransmission</strong> - Configurable retry intervals</li>
+                <li><strong>DUP Flag Support</strong> - Proper duplicate handling</li>
+                <li><strong>Multiple In-Flight Messages</strong> - No artificial ordering constraints</li>
+                <li><strong>Packet ID Management</strong> - Sequential generation with recycling</li>
+                <li><strong>QoS Downgrade</strong> - Proper min(publish, subscribe) handling</li>
+            </ul>
+
+            <h2>Architecture & Performance</h2>
+            <ul class="feature-list">
+                <li>🚀 <strong>Async/Await</strong> - Built on Tokio for high concurrency</li>
+                <li>🛡️ <strong>Memory Safe</strong> - Written in Rust with zero unsafe code</li>
+                <li>⚡ <strong>Zero-Copy Routing</strong> - Efficient message forwarding</li>
+                <li>🔄 <strong>Event-Driven</strong> - Responsive packet handling</li>
+                <li>🎯 <strong>Lock-Free Operations</strong> - Where possible for performance</li>
+                <li>📊 <strong>Benchmarked</strong> - Tested with thousands of connections</li>
+            </ul>
+
+            <h2>Reliability & Safety</h2>
+            <ul class="feature-list">
+                <li>✅ <strong>Race-Condition Free</strong> - CancellationToken architecture</li>
+                <li>✅ <strong>Graceful Shutdown</strong> - Proper cleanup on exit</li>
+                <li>✅ <strong>Session Takeover</strong> - Handle duplicate client IDs</li>
+                <li>✅ <strong>Resource Limits</strong> - Configurable connection limits</li>
+                <li>✅ <strong>Protocol Validation</strong> - Strict MQTT compliance</li>
+                <li>✅ <strong>Error Recovery</strong> - Resilient to client misbehavior</li>
+            </ul>
+
+            <h2>Developer Experience</h2>
+            <ul class="feature-list">
+                <li>📝 <strong>Configuration Files</strong> - TOML-based configuration</li>
+                <li>🔧 <strong>CLI Arguments</strong> - Easy command-line control</li>
+                <li>📊 <strong>Structured Logging</strong> - Clear, actionable logs</li>
+                <li>🧪 <strong>Comprehensive Tests</strong> - 85+ unit and integration tests</li>
+                <li>📚 <strong>Documentation</strong> - Architecture and API docs</li>
+                <li>🐳 <strong>Docker Support</strong> - Minimal Alpine-based images</li>
+            </ul>
+
+            <h2>Performance Metrics</h2>
+            <div class="code-block">
+                <pre>• Memory Usage: ~8.45 KB per connection
+• Throughput: 8,600+ messages/second to 950 subscribers
+• Message Rate: 4,000-9,000 msg/sec for small messages
+• Startup Time: < 100ms
+• Binary Size: < 10MB (statically linked)</pre>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 IoTD Project. Licensed under MIT.</p>
+            <p>Built with ❤️ using Rust</p>
+        </div>
+    </footer>
+</body>
+</html>
