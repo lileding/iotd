@@ -23,6 +23,8 @@ async-trait = "0.1"
 toml = "0.8"
 futures = "0.3"
 tokio-util = "0.7.15"
+rusqlite = { version = "0.31", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

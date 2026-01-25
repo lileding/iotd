@@ -1,9 +1,32 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub server: ServerConfig,
+    #[serde(default)]
+    pub persistence: PersistenceConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistenceConfig {
+    /// Enable persistence (default: false)
+    pub enabled: bool,
+    /// Path to SQLite database file
+    pub database_path: PathBuf,
+    /// Session expiry in seconds (0 = never expire, default: 86400 = 24 hours)
+    pub session_expiry_seconds: u64,
+}
+
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            database_path: PathBuf::from("iotd.db"),
+            session_expiry_seconds: 86400, // 24 hours
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
