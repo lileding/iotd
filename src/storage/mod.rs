@@ -1,7 +1,9 @@
+pub mod memory;
 pub mod sqlite;
 pub mod traits;
 pub mod types;
 
-pub use sqlite::{SqliteStorage, StorageError};
+pub use memory::InMemoryStorage;
+pub use sqlite::SqliteStorage;
 pub use traits::*;
 pub use types::*;

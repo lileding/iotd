@@ -1,30 +1,24 @@
+use crate::storage::traits::{Storage, StorageError, StorageResult};
 use crate::storage::types::{
     PersistedInflightMessage, PersistedRetainedMessage, PersistedSession, PersistedSubscription,
     PersistedWillMessage, StoredQoS,
 };
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, Result, Transaction};
+use rusqlite::{params, Connection, Transaction};
 use std::path::Path;
 use std::sync::Mutex;
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum StorageError {
-    #[error("SQLite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
-    #[error("Invalid datetime in {table}.{field} for {record_id}: '{value}'")]
-    InvalidDateTime {
-        table: &'static str,
-        field: &'static str,
-        record_id: String,
-        value: String,
-    },
-}
 
 /// SQLite-based persistence storage for MQTT sessions
+#[derive(Debug)]
 pub struct SqliteStorage {
     conn: Mutex<Connection>,
+}
+
+impl From<rusqlite::Error> for StorageError {
+    fn from(e: rusqlite::Error) -> Self {
+        StorageError::Internal(e.to_string())
+    }
 }
 
 fn parse_datetime(
@@ -32,7 +26,7 @@ fn parse_datetime(
     table: &'static str,
     field: &'static str,
     record_id: &str,
-) -> std::result::Result<DateTime<Utc>, StorageError> {
+) -> StorageResult<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|_| StorageError::InvalidDateTime {
@@ -45,7 +39,7 @@ fn parse_datetime(
 
 impl SqliteStorage {
     /// Create a new SQLite storage with the given database path
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(path: P) -> StorageResult<Self> {
         let conn = Connection::open(path)?;
         let storage = Self {
             conn: Mutex::new(conn),
@@ -55,7 +49,7 @@ impl SqliteStorage {
     }
 
     /// Create an in-memory SQLite storage (useful for testing)
-    pub fn in_memory() -> Result<Self> {
+    pub fn in_memory() -> StorageResult<Self> {
         let conn = Connection::open_in_memory()?;
         let storage = Self {
             conn: Mutex::new(conn),
@@ -65,7 +59,7 @@ impl SqliteStorage {
     }
 
     /// Initialize database schema
-    fn initialize_schema(&self) -> Result<()> {
+    fn initialize_schema(&self) -> StorageResult<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute_batch(
@@ -124,7 +118,7 @@ impl SqliteStorage {
     }
 
     /// Helper to delete all data for a client within a transaction
-    fn delete_client_data(tx: &Transaction, client_id: &str) -> Result<()> {
+    fn delete_client_data(tx: &Transaction, client_id: &str) -> StorageResult<()> {
         tx.execute(
             "DELETE FROM inflight_messages WHERE client_id = ?1",
             params![client_id],
@@ -139,11 +133,12 @@ impl SqliteStorage {
         )?;
         Ok(())
     }
+}
 
+impl Storage for SqliteStorage {
     // ========== Session Operations ==========
 
-    /// Save or update a session
-    pub fn save_session(&self, session: &PersistedSession) -> Result<()> {
+    fn save_session(&self, session: &PersistedSession) -> StorageResult<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -178,11 +173,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Load a session by client ID
-    pub fn load_session(
-        &self,
-        client_id: &str,
-    ) -> std::result::Result<Option<PersistedSession>, StorageError> {
+    fn load_session(&self, client_id: &str) -> StorageResult<Option<PersistedSession>> {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
@@ -230,18 +221,17 @@ impl SqliteStorage {
         }
     }
 
-    /// Delete a session and all associated data (uses transaction)
-    pub fn delete_session(&self, client_id: &str) -> Result<()> {
+    fn delete_session(&self, client_id: &str) -> StorageResult<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
 
         Self::delete_client_data(&tx, client_id)?;
 
-        tx.commit()
+        tx.commit()?;
+        Ok(())
     }
 
-    /// Check if a session exists
-    pub fn session_exists(&self, client_id: &str) -> Result<bool> {
+    fn session_exists(&self, client_id: &str) -> StorageResult<bool> {
         let conn = self.conn.lock().unwrap();
 
         let count: i32 = conn.query_row(
@@ -253,8 +243,7 @@ impl SqliteStorage {
         Ok(count > 0)
     }
 
-    /// Delete expired sessions older than the given datetime (uses transaction)
-    pub fn delete_expired_sessions(&self, older_than: DateTime<Utc>) -> Result<usize> {
+    fn delete_expired_sessions(&self, older_than: DateTime<Utc>) -> StorageResult<usize> {
         let mut conn = self.conn.lock().unwrap();
         let older_than_str = older_than.to_rfc3339();
 
@@ -265,7 +254,7 @@ impl SqliteStorage {
             let mut stmt = tx.prepare("SELECT client_id FROM sessions WHERE updated_at < ?1")?;
             let results: Vec<String> = stmt
                 .query_map(params![older_than_str], |row| row.get(0))?
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             results
         };
 
@@ -283,8 +272,7 @@ impl SqliteStorage {
 
     // ========== Subscription Operations ==========
 
-    /// Save a subscription
-    pub fn save_subscription(&self, sub: &PersistedSubscription) -> Result<()> {
+    fn save_subscription(&self, sub: &PersistedSubscription) -> StorageResult<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -300,8 +288,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Save multiple subscriptions for a client (uses transaction)
-    pub fn save_subscriptions(&self, subscriptions: &[PersistedSubscription]) -> Result<()> {
+    fn save_subscriptions(&self, subscriptions: &[PersistedSubscription]) -> StorageResult<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
 
@@ -320,11 +307,11 @@ impl SqliteStorage {
             }
         }
 
-        tx.commit()
+        tx.commit()?;
+        Ok(())
     }
 
-    /// Load all subscriptions for a client
-    pub fn load_subscriptions(&self, client_id: &str) -> Result<Vec<PersistedSubscription>> {
+    fn load_subscriptions(&self, client_id: &str) -> StorageResult<Vec<PersistedSubscription>> {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
@@ -340,13 +327,12 @@ impl SqliteStorage {
                     qos: StoredQoS::from_u8(qos_val).unwrap_or(StoredQoS::AtMostOnce),
                 })
             })?
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(subs)
     }
 
-    /// Delete a subscription
-    pub fn delete_subscription(&self, client_id: &str, topic_filter: &str) -> Result<()> {
+    fn delete_subscription(&self, client_id: &str, topic_filter: &str) -> StorageResult<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -357,8 +343,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Delete all subscriptions for a client
-    pub fn delete_all_subscriptions(&self, client_id: &str) -> Result<()> {
+    fn delete_all_subscriptions(&self, client_id: &str) -> StorageResult<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -371,8 +356,7 @@ impl SqliteStorage {
 
     // ========== In-flight Message Operations ==========
 
-    /// Save an in-flight message
-    pub fn save_inflight_message(&self, msg: &PersistedInflightMessage) -> Result<()> {
+    fn save_inflight_message(&self, msg: &PersistedInflightMessage) -> StorageResult<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -398,11 +382,10 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Load all in-flight messages for a client
-    pub fn load_inflight_messages(
+    fn load_inflight_messages(
         &self,
         client_id: &str,
-    ) -> std::result::Result<Vec<PersistedInflightMessage>, StorageError> {
+    ) -> StorageResult<Vec<PersistedInflightMessage>> {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
@@ -447,8 +430,7 @@ impl SqliteStorage {
         Ok(messages)
     }
 
-    /// Delete an in-flight message (when PUBACK received)
-    pub fn delete_inflight_message(&self, client_id: &str, packet_id: u16) -> Result<()> {
+    fn delete_inflight_message(&self, client_id: &str, packet_id: u16) -> StorageResult<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -459,8 +441,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Delete all in-flight messages for a client
-    pub fn delete_all_inflight_messages(&self, client_id: &str) -> Result<()> {
+    fn delete_all_inflight_messages(&self, client_id: &str) -> StorageResult<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -473,8 +454,7 @@ impl SqliteStorage {
 
     // ========== Retained Message Operations ==========
 
-    /// Save a retained message
-    pub fn save_retained_message(&self, msg: &PersistedRetainedMessage) -> Result<()> {
+    fn save_retained_message(&self, msg: &PersistedRetainedMessage) -> StorageResult<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -497,11 +477,10 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Load a retained message by topic
-    pub fn load_retained_message(
+    fn load_retained_message(
         &self,
         topic: &str,
-    ) -> std::result::Result<Option<PersistedRetainedMessage>, StorageError> {
+    ) -> StorageResult<Option<PersistedRetainedMessage>> {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn.prepare(
@@ -532,10 +511,7 @@ impl SqliteStorage {
         }
     }
 
-    /// Load all retained messages
-    pub fn load_all_retained_messages(
-        &self,
-    ) -> std::result::Result<Vec<PersistedRetainedMessage>, StorageError> {
+    fn load_all_retained_messages(&self) -> StorageResult<Vec<PersistedRetainedMessage>> {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt =
@@ -566,8 +542,7 @@ impl SqliteStorage {
         Ok(messages)
     }
 
-    /// Delete a retained message
-    pub fn delete_retained_message(&self, topic: &str) -> Result<()> {
+    fn delete_retained_message(&self, topic: &str) -> StorageResult<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute(
@@ -578,8 +553,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Count retained messages
-    pub fn count_retained_messages(&self) -> Result<usize> {
+    fn count_retained_messages(&self) -> StorageResult<usize> {
         let conn = self.conn.lock().unwrap();
 
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM retained_messages", [], |row| {
