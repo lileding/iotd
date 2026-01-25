@@ -1,5 +1,10 @@
+use crate::storage::{
+    PersistedInflightMessage, PersistedSession, PersistedSubscription, PersistedWillMessage,
+    StoredQoS,
+};
 use crate::{broker::Broker, protocol::packet, protocol::v3, transport::AsyncStream};
 use bytes::{Bytes, BytesMut};
+use chrono::Utc;
 use std::{collections::VecDeque, future::Future, pin::Pin, sync::Arc};
 use thiserror::Error;
 use tokio::{
@@ -8,7 +13,7 @@ use tokio::{
     task::JoinHandle,
     time::{Duration, Instant},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 pub struct Session {
@@ -348,6 +353,11 @@ impl Runtime {
             self.publish_will().await;
         }
 
+        // Save session state to storage when going to WaitTakeover
+        if matches!(next_state, State::WaitTakeover) {
+            self.save_to_storage().await;
+        }
+
         next_state
     }
 
@@ -464,6 +474,8 @@ impl Runtime {
         }
 
         // Handle client ID and potential session takeover
+        let mut session_present = false;
+
         if !connect.client_id.is_empty() {
             self.client_id.replace(connect.client_id.clone());
 
@@ -481,11 +493,25 @@ impl Runtime {
                 takeover(stream, connect.clean_session, connect.keep_alive).await;
                 return Ok(State::Cleanup); // Exit this session task
             }
+
+            // Handle session persistence
+            if connect.clean_session {
+                // Clean session: delete any existing saved session
+                if let Err(e) = self.broker.storage().delete_session(&connect.client_id) {
+                    warn!(
+                        "Failed to delete existing session for {}: {}",
+                        connect.client_id, e
+                    );
+                }
+            } else {
+                // Persistent session: try to restore from storage
+                session_present = self.restore_from_storage(&connect.client_id).await;
+            }
         }
 
         // Send CONNACK response
         let connack = packet::ConnAckPacket {
-            session_present: false, // New connection, no existing session
+            session_present,
             return_code: crate::protocol::v3::connect_return_codes::ACCEPTED,
         };
         let mut buf = BytesMut::new();
@@ -516,6 +542,14 @@ impl Runtime {
                 self.keep_alive = keep_alive;
                 if clean_session {
                     self.broker.unsubscribe_all(&self.id).await;
+                    // Delete any saved session from storage
+                    if let Some(client_id) = &self.client_id {
+                        if let Err(e) = self.broker.storage().delete_session(client_id) {
+                            warn!("Failed to delete session {} from storage: {}", client_id, e);
+                        }
+                    }
+                    // Clear in-flight messages
+                    self.qos1_queue.clear();
                 }
                 Ok(())
             }
@@ -791,5 +825,172 @@ impl Runtime {
             };
             self.broker.route(packet).await;
         }
+    }
+
+    /// Save session state to storage for clean_session=false clients
+    async fn save_to_storage(&self) {
+        let client_id = match &self.client_id {
+            Some(id) => id,
+            None => return, // No client ID, nothing to save
+        };
+
+        let now = Utc::now();
+
+        // Build persisted session
+        let persisted_session = PersistedSession {
+            client_id: client_id.clone(),
+            next_packet_id: self.next_packet_id,
+            keep_alive: self.keep_alive,
+            will_message: self.will_message.as_ref().map(|w| PersistedWillMessage {
+                topic: w.topic.clone(),
+                payload: w.payload.clone(),
+                qos: StoredQoS::from(w._qos),
+                retain: w.retain,
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        // Get subscriptions from router
+        let router_subs = self.broker.get_subscriptions(&self.id).await;
+        let persisted_subs: Vec<PersistedSubscription> = router_subs
+            .into_iter()
+            .map(|(filter, qos)| PersistedSubscription {
+                client_id: client_id.clone(),
+                topic_filter: filter,
+                qos: StoredQoS::from(qos),
+            })
+            .collect();
+
+        // Convert in-flight messages
+        let persisted_inflight: Vec<PersistedInflightMessage> = self
+            .qos1_queue
+            .iter()
+            .map(|inflight| PersistedInflightMessage {
+                client_id: client_id.clone(),
+                packet_id: inflight.packet.packet_id.unwrap_or(0),
+                topic: inflight.packet.topic.clone(),
+                payload: inflight.packet.payload.clone(),
+                qos: StoredQoS::from(inflight.packet.qos),
+                retain: inflight.packet.retain,
+                retry_count: inflight.retry_count,
+                created_at: now,
+            })
+            .collect();
+
+        // Save to storage
+        if let Err(e) = self.broker.storage().save_session(
+            &persisted_session,
+            &persisted_subs,
+            &persisted_inflight,
+        ) {
+            warn!("Failed to save session {} to storage: {}", client_id, e);
+        } else {
+            info!(
+                "Saved session {} to storage ({} subscriptions, {} inflight messages)",
+                client_id,
+                persisted_subs.len(),
+                persisted_inflight.len()
+            );
+        }
+    }
+
+    /// Load session state from storage and restore subscriptions/inflight messages
+    async fn restore_from_storage(&mut self, client_id: &str) -> bool {
+        // Load session
+        let persisted_session = match self.broker.storage().load_session(client_id) {
+            Ok(Some(session)) => session,
+            Ok(None) => return false, // No saved session
+            Err(e) => {
+                warn!("Failed to load session {} from storage: {}", client_id, e);
+                return false;
+            }
+        };
+
+        // Load subscriptions
+        let persisted_subs = match self.broker.storage().load_subscriptions(client_id) {
+            Ok(subs) => subs,
+            Err(e) => {
+                warn!(
+                    "Failed to load subscriptions for {} from storage: {}",
+                    client_id, e
+                );
+                Vec::new()
+            }
+        };
+
+        // Load inflight messages
+        let persisted_inflight = match self.broker.storage().load_inflight_messages(client_id) {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                warn!(
+                    "Failed to load inflight messages for {} from storage: {}",
+                    client_id, e
+                );
+                Vec::new()
+            }
+        };
+
+        // Restore session state
+        self.next_packet_id = persisted_session.next_packet_id;
+        self.keep_alive = persisted_session.keep_alive;
+        self.will_message = persisted_session.will_message.map(|w| WillMessage {
+            topic: w.topic,
+            payload: w.payload,
+            _qos: packet::QoS::from(w.qos),
+            retain: w.retain,
+        });
+
+        // Restore subscriptions to router
+        let topic_filters: Vec<(String, packet::QoS)> = persisted_subs
+            .iter()
+            .map(|s| (s.topic_filter.clone(), packet::QoS::from(s.qos)))
+            .collect();
+
+        if !topic_filters.is_empty() {
+            self.broker
+                .subscribe(&self.id, self.message_tx.clone(), &topic_filters)
+                .await;
+            info!(
+                "Restored {} subscriptions for session {}",
+                topic_filters.len(),
+                client_id
+            );
+        }
+
+        // Restore in-flight messages
+        for msg in persisted_inflight {
+            let inflight = InflightMessage {
+                packet: packet::PublishPacket {
+                    topic: msg.topic,
+                    packet_id: Some(msg.packet_id),
+                    payload: msg.payload,
+                    qos: packet::QoS::from(msg.qos),
+                    retain: msg.retain,
+                    dup: true, // Retransmitted messages have DUP set
+                },
+                timestamp: Instant::now(),
+                retry_count: msg.retry_count,
+            };
+            self.qos1_queue.push_back(inflight);
+        }
+
+        if !self.qos1_queue.is_empty() {
+            info!(
+                "Restored {} inflight messages for session {}",
+                self.qos1_queue.len(),
+                client_id
+            );
+        }
+
+        // Delete from storage after successful restore
+        if let Err(e) = self.broker.storage().delete_session(client_id) {
+            warn!(
+                "Failed to delete restored session {} from storage: {}",
+                client_id, e
+            );
+        }
+
+        true
     }
 }

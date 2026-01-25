@@ -187,6 +187,24 @@ impl Router {
         }
     }
 
+    /// Get all subscriptions for a session (used for persistence)
+    pub async fn get_subscriptions(&self, session_id: &str) -> Vec<(String, QoS)> {
+        let router = self.data.read().await;
+        let mut result = Vec::new();
+
+        if let Some(filters) = router.sessions.get(session_id) {
+            for filter in filters {
+                if let Some(sessions) = router.filters.get(filter) {
+                    if let Some((_, qos)) = sessions.get(session_id) {
+                        result.push((filter.clone(), *qos));
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
     pub async fn route(&self, packet: PublishPacket) {
         // Validate topic name
         if !Self::is_valid_topic_name(&packet.topic) {

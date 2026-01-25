@@ -122,4 +122,8 @@ impl Broker {
     pub async fn route(&self, packet: PublishPacket) {
         self.router.route(packet).await
     }
+
+    pub async fn get_subscriptions(&self, session_id: &str) -> Vec<(String, QoS)> {
+        self.router.get_subscriptions(session_id).await
+    }
 }
