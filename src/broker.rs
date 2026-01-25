@@ -15,7 +15,6 @@ pub struct Broker {
     named_clients: DashMap<String, TakeoverAction>,
     router: Router,
     config: Config,
-    #[allow(dead_code)] // Will be used for session persistence
     storage: Arc<dyn Storage>,
 }
 
@@ -25,7 +24,7 @@ impl Broker {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
             named_clients: DashMap::new(),
-            router: Router::new(retained_message_limit),
+            router: Router::new(retained_message_limit, Arc::clone(&storage)),
             config,
             storage,
         })
@@ -45,7 +44,6 @@ impl Broker {
         &self.config
     }
 
-    #[allow(dead_code)] // Will be used for session persistence
     pub fn storage(&self) -> &Arc<dyn Storage> {
         &self.storage
     }

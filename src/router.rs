@@ -2,32 +2,34 @@ use crate::protocol::packet::{PublishPacket, QoS};
 use crate::protocol::v3::subscribe_return_codes::{FAILURE, MAXIMUM_QOS_0};
 use crate::protocol::Packet;
 use crate::session::Mailbox;
+use crate::storage::{PersistedRetainedMessage, Storage, StoredQoS};
+use chrono::Utc;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 
 struct RouterInternal {
     // FILTER -> (SESSION_ID -> (SENDER, QoS))
     filters: HashMap<String, HashMap<String, (Mailbox, QoS)>>,
     // SESSION_ID -> FILTER
     sessions: HashMap<String, HashSet<String>>,
-    // TOPIC -> RETAINED MESSAGE
-    retained_messages: HashMap<String, PublishPacket>,
 }
 
 pub struct Router {
     data: RwLock<RouterInternal>,
+    storage: Arc<dyn Storage>,
     retained_message_limit: usize,
 }
 
 impl Router {
-    pub fn new(retained_message_limit: usize) -> Self {
+    pub fn new(retained_message_limit: usize, storage: Arc<dyn Storage>) -> Self {
         Self {
             data: RwLock::new(RouterInternal {
                 filters: HashMap::new(),
                 sessions: HashMap::new(),
-                retained_messages: HashMap::new(),
             }),
+            storage,
             retained_message_limit,
         }
     }
@@ -93,6 +95,15 @@ impl Router {
         let mut return_codes = Vec::new();
         let mut retained_to_send = Vec::new();
 
+        // Load all retained messages from storage
+        let retained_messages = match self.storage.load_all_retained_messages() {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                warn!("Failed to load retained messages: {}", e);
+                Vec::new()
+            }
+        };
+
         {
             let mut router = self.data.write().await;
 
@@ -130,10 +141,11 @@ impl Router {
                 );
 
                 // Find retained messages matching this subscription
-                for (topic, retained_packet) in router.retained_messages.iter() {
-                    if Self::topic_matches(topic, &filter.0) {
+                for retained in &retained_messages {
+                    if Self::topic_matches(&retained.topic, &filter.0) {
+                        let retained_qos = QoS::from(retained.qos);
                         // Apply QoS downgrade for retained messages too
-                        let effective_qos = match (retained_packet.qos, filter.1) {
+                        let effective_qos = match (retained_qos, filter.1) {
                             (QoS::AtMostOnce, _) => QoS::AtMostOnce,
                             (_, QoS::AtMostOnce) => QoS::AtMostOnce,
                             (QoS::AtLeastOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
@@ -142,13 +154,19 @@ impl Router {
                             (QoS::ExactlyOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce, // We don't support QoS=2 yet
                         };
 
-                        let mut packet = retained_packet.clone();
-                        // Retained messages should be sent with retain flag set to true
-                        packet.retain = true;
-                        packet.qos = effective_qos;
+                        let packet = PublishPacket {
+                            topic: retained.topic.clone(),
+                            packet_id: None,
+                            payload: retained.payload.clone(),
+                            qos: effective_qos,
+                            retain: true,
+                            dup: false,
+                        };
                         retained_to_send.push(packet);
-                        info!("Found retained message for topic {} matching filter {}, downgraded QoS from {:?} to {:?}", 
-                              topic, filter.0, retained_packet.qos, effective_qos);
+                        info!(
+                            "Found retained message for topic {} matching filter {}, QoS {:?} -> {:?}",
+                            retained.topic, filter.0, retained_qos, effective_qos
+                        );
                     }
                 }
             }
@@ -214,39 +232,49 @@ impl Router {
 
         // Handle retained message storage
         if packet.retain {
-            let mut router = self.data.write().await;
-
             if packet.payload.is_empty() {
                 // Empty payload with retain=true means delete the retained message
-                router.retained_messages.remove(&packet.topic);
-                info!("Deleted retained message for topic: {}", packet.topic);
+                if let Err(e) = self.storage.delete_retained_message(&packet.topic) {
+                    warn!(
+                        "Failed to delete retained message for {}: {}",
+                        packet.topic, e
+                    );
+                } else {
+                    info!("Deleted retained message for topic: {}", packet.topic);
+                }
             } else {
                 // Check if we're at the limit and this is a new topic
-                if !router.retained_messages.contains_key(&packet.topic)
-                    && router.retained_messages.len() >= self.retained_message_limit
-                {
+                let existing = self.storage.load_retained_message(&packet.topic);
+                let count = self.storage.count_retained_messages().unwrap_or(0);
+
+                let is_new = matches!(existing, Ok(None));
+                if is_new && count >= self.retained_message_limit {
                     info!(
                         "Retained message limit reached ({}/{}), dropping message for topic: {}",
-                        router.retained_messages.len(),
-                        self.retained_message_limit,
-                        packet.topic
+                        count, self.retained_message_limit, packet.topic
                     );
                 } else {
                     // Store the retained message
-                    router
-                        .retained_messages
-                        .insert(packet.topic.clone(), packet.clone());
-                    info!(
-                        "Stored retained message for topic: {} (total: {}/{})",
-                        packet.topic,
-                        router.retained_messages.len(),
-                        self.retained_message_limit
-                    );
+                    let retained = PersistedRetainedMessage {
+                        topic: packet.topic.clone(),
+                        payload: packet.payload.clone(),
+                        qos: StoredQoS::from(packet.qos),
+                        updated_at: Utc::now(),
+                    };
+                    if let Err(e) = self.storage.save_retained_message(&retained) {
+                        warn!(
+                            "Failed to save retained message for {}: {}",
+                            packet.topic, e
+                        );
+                    } else {
+                        let new_count = self.storage.count_retained_messages().unwrap_or(0);
+                        info!(
+                            "Stored retained message for topic: {} (total: {}/{})",
+                            packet.topic, new_count, self.retained_message_limit
+                        );
+                    }
                 }
             }
-
-            // Continue to route to current subscribers
-            drop(router);
         }
 
         // Route to current subscribers
