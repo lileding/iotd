@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::protocol::packet::{PublishPacket, QoS};
 use crate::router::Router;
 use crate::session::{Mailbox, Session, TakeoverAction};
+use crate::storage::Storage;
 use crate::transport::AsyncStream;
 use dashmap::{mapref::entry::Entry, DashMap};
 use std::collections::HashMap;
@@ -14,16 +15,19 @@ pub struct Broker {
     named_clients: DashMap<String, TakeoverAction>,
     router: Router,
     config: Config,
+    #[allow(dead_code)] // Will be used for session persistence
+    storage: Arc<dyn Storage>,
 }
 
 impl Broker {
-    pub fn new(config: Config) -> Arc<Self> {
+    pub fn new(config: Config, storage: Arc<dyn Storage>) -> Arc<Self> {
         let retained_message_limit = config.retained_message_limit;
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
             named_clients: DashMap::new(),
             router: Router::new(retained_message_limit),
             config,
+            storage,
         })
     }
 
@@ -39,6 +43,11 @@ impl Broker {
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    #[allow(dead_code)] // Will be used for session persistence
+    pub fn storage(&self) -> &Arc<dyn Storage> {
+        &self.storage
     }
 
     pub async fn clean_all_sessions(&self) {

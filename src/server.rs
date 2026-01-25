@@ -1,5 +1,6 @@
 use crate::broker::Broker;
 use crate::config::Config;
+use crate::storage;
 use crate::transport::{AsyncListener, TcpAsyncListener};
 use std::sync::Arc;
 use thiserror::Error;
@@ -20,6 +21,8 @@ pub enum ServerError {
     NotRunning,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Storage error: {0}")]
+    Storage(#[from] storage::StorageError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,7 +42,7 @@ struct LifecycleState {
 
 /// Static function to start a server with the given configuration
 pub async fn start(config: Config) -> Result<Server> {
-    let server = Server::new(config);
+    let server = Server::new(config)?;
     server.start().await?;
     Ok(server)
 }
@@ -51,9 +54,12 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(config: Config) -> Self {
-        Self {
-            broker: Broker::new(config.clone()),
+    pub fn new(config: Config) -> Result<Self> {
+        let storage = storage::new(&config.persistence)?;
+        info!("Storage backend: {:?}", config.persistence.backend);
+
+        Ok(Self {
+            broker: Broker::new(config.clone(), storage),
             config,
             lifecycle: Mutex::new(LifecycleState {
                 state: ServerState::Stopped,
@@ -61,7 +67,7 @@ impl Server {
                 server_handle: None,
                 address: None,
             }),
-        }
+        })
     }
 
     pub async fn start(&self) -> Result<()> {
@@ -204,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_lifecycle() {
-        let server = Server::new(test_config(0));
+        let server = Server::new(test_config(0)).unwrap();
 
         // Initially stopped
         assert!(!server.is_running().await);
@@ -230,7 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_restart() {
-        let server = Server::new(test_config(0));
+        let server = Server::new(test_config(0)).unwrap();
 
         // First run
         server.start().await.unwrap();
@@ -255,7 +261,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stop_before_start() {
-        let server = Server::new(test_config(0));
+        let server = Server::new(test_config(0)).unwrap();
 
         // Stop without start should fail
         assert!(matches!(server.stop().await, Err(ServerError::NotRunning)));
