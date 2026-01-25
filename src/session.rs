@@ -51,12 +51,18 @@ pub type Mailbox = mpsc::Sender<packet::Packet>;
 struct WillMessage {
     topic: String,
     payload: Bytes,
-    _qos: packet::QoS,
+    qos: packet::QoS,
     retain: bool,
 }
 
+struct TakeoverParams {
+    stream: Box<dyn AsyncStream>,
+    clean_session: bool,
+    keep_alive: u16,
+}
+
 enum Command {
-    Takeover(Box<dyn AsyncStream>, bool, u16),
+    Takeover(TakeoverParams),
     Cancel,
 }
 
@@ -77,6 +83,14 @@ enum SessionError {
 }
 
 type Result<T> = std::result::Result<T, SessionError>;
+
+/// Helper to encode and send a packet
+async fn send_packet<W: AsyncWrite + Unpin>(packet: packet::Packet, writer: &mut W) -> Result<()> {
+    let mut buf = BytesMut::new();
+    packet.encode(&mut buf);
+    writer.write_all(&buf).await?;
+    Ok(())
+}
 
 pub type TakeoverAction = Arc<
     dyn Fn(Box<dyn AsyncStream>, bool, u16) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>
@@ -131,10 +145,12 @@ impl Session {
                 let command_tx2 = command_tx.clone();
 
                 Box::pin(async move {
-                    if let Err(e) = command_tx2
-                        .send(Command::Takeover(stream, clean_session, keep_alive))
-                        .await
-                    {
+                    let params = TakeoverParams {
+                        stream,
+                        clean_session,
+                        keep_alive,
+                    };
+                    if let Err(e) = command_tx2.send(Command::Takeover(params)).await {
                         error!("Failed to send takeover message: {}", e);
                     }
                 })
@@ -295,22 +311,19 @@ impl Runtime {
                 }
 
                 command = self.command_rx.recv() => {
-                    if let Some(Command::Takeover(
-                            mut new_stream, clean_session, keep_alive)) = command {
+                    if let Some(Command::Takeover(mut params)) = command {
                         // Disconnect original client
-                        let mut buf = BytesMut::new();
-                        packet::Packet::Disconnect.encode(&mut buf);
-                        let _ = writer.write_all(&buf).await;
+                        let _ = send_packet(packet::Packet::Disconnect, &mut writer).await;
 
                         // Process takeover message
-                        match self.on_takeover(&mut new_stream, clean_session, keep_alive).await {
+                        match self.on_takeover(&mut params.stream, params.clean_session, params.keep_alive).await {
                             Ok(_) => {
-                                self.stream.replace(new_stream);
+                                self.stream.replace(params.stream);
                                 next_state = State::Processing;
                             },
                             Err(e) => {
                                 info!("Session {} error: {}", self.id, e);
-                                if !clean_session {
+                                if !params.clean_session {
                                     next_state = State::Pending;
                                 }
                             }
@@ -352,17 +365,17 @@ impl Runtime {
     async fn do_pending(&mut self) -> State {
         debug!("Session {} STATE PENDING", self.id);
 
-        // Save session state to storage at the beginning of Disconnected state
+        // Save session state to storage at the beginning of Pending state
         self.save_to_storage().await;
 
         match self.command_rx.recv().await {
-            Some(Command::Takeover(mut stream, clean_session, keep_alive)) => {
+            Some(Command::Takeover(mut params)) => {
                 match self
-                    .on_takeover(&mut stream, clean_session, keep_alive)
+                    .on_takeover(&mut params.stream, params.clean_session, params.keep_alive)
                     .await
                 {
                     Ok(_) => {
-                        self.stream.replace(stream);
+                        self.stream.replace(params.stream);
                         State::Processing
                     }
                     Err(e) => {
@@ -394,55 +407,20 @@ impl Runtime {
                 "Invalid protocol: name={}, level={}",
                 connect.protocol_name, connect.protocol_level
             );
-            let connack = packet::ConnAckPacket {
-                session_present: false,
-                return_code: v3::connect_return_codes::UNACCEPTABLE_PROTOCOL_VERSION,
-            };
-            let mut buf = BytesMut::new();
-            packet::Packet::ConnAck(connack).encode(&mut buf);
-            stream.write_all(&buf).await?;
+            self.send_connack_error(
+                &mut stream,
+                v3::connect_return_codes::UNACCEPTABLE_PROTOCOL_VERSION,
+            )
+            .await?;
             return Ok(State::Cleanup);
         }
 
         // Validate client ID
-        if !connect.client_id.is_empty() {
-            // Check length (23 UTF-8 bytes max)
-            if connect.client_id.len() > 23 {
-                info!("Client ID too long: {} bytes", connect.client_id.len());
-                let connack = packet::ConnAckPacket {
-                    session_present: false,
-                    return_code: v3::connect_return_codes::IDENTIFIER_REJECTED,
-                };
-                let mut buf = BytesMut::new();
-                packet::Packet::ConnAck(connack).encode(&mut buf);
-                stream.write_all(&buf).await?;
-                return Ok(State::Cleanup);
-            }
-
-            // Check character set (0-9, a-z, A-Z)
-            if !connect.client_id.chars().all(|c| c.is_ascii_alphanumeric()) {
-                info!(
-                    "Client ID contains invalid characters: {}",
-                    connect.client_id
-                );
-                let connack = packet::ConnAckPacket {
-                    session_present: false,
-                    return_code: v3::connect_return_codes::IDENTIFIER_REJECTED,
-                };
-                let mut buf = BytesMut::new();
-                packet::Packet::ConnAck(connack).encode(&mut buf);
-                stream.write_all(&buf).await?;
-                return Ok(State::Cleanup);
-            }
-        } else if !connect.clean_session {
-            // Empty client ID with clean_session=false is not allowed
-            let connack = packet::ConnAckPacket {
-                session_present: false,
-                return_code: v3::connect_return_codes::IDENTIFIER_REJECTED,
-            };
-            let mut buf = BytesMut::new();
-            packet::Packet::ConnAck(connack).encode(&mut buf);
-            stream.write_all(&buf).await?;
+        if let Err(return_code) =
+            Self::validate_client_id(&connect.client_id, connect.clean_session)
+        {
+            info!("Client ID validation failed: {}", connect.client_id);
+            self.send_connack_error(&mut stream, return_code).await?;
             return Ok(State::Cleanup);
         }
 
@@ -456,7 +434,7 @@ impl Runtime {
                 let will = WillMessage {
                     topic,
                     payload,
-                    _qos: connect.will_qos,
+                    qos: connect.will_qos,
                     retain: connect.will_retain,
                 };
                 self.will_message.replace(will);
@@ -503,14 +481,43 @@ impl Runtime {
         // Send CONNACK response
         let connack = packet::ConnAckPacket {
             session_present,
-            return_code: crate::protocol::v3::connect_return_codes::ACCEPTED,
+            return_code: v3::connect_return_codes::ACCEPTED,
         };
-        let mut buf = BytesMut::new();
-        packet::Packet::ConnAck(connack).encode(&mut buf);
-        stream.write_all(&buf).await?;
+        send_packet(packet::Packet::ConnAck(connack), &mut stream).await?;
 
         self.stream.replace(stream);
         Ok(State::Processing)
+    }
+
+    /// Validate client ID according to MQTT 3.1.1 spec
+    fn validate_client_id(client_id: &str, clean_session: bool) -> std::result::Result<(), u8> {
+        if !client_id.is_empty() {
+            // Check length (23 UTF-8 bytes max)
+            if client_id.len() > 23 {
+                return Err(v3::connect_return_codes::IDENTIFIER_REJECTED);
+            }
+            // Check character set (0-9, a-z, A-Z)
+            if !client_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err(v3::connect_return_codes::IDENTIFIER_REJECTED);
+            }
+        } else if !clean_session {
+            // Empty client ID with clean_session=false is not allowed
+            return Err(v3::connect_return_codes::IDENTIFIER_REJECTED);
+        }
+        Ok(())
+    }
+
+    /// Send CONNACK with error return code
+    async fn send_connack_error(
+        &self,
+        stream: &mut Box<dyn AsyncStream>,
+        return_code: u8,
+    ) -> Result<()> {
+        let connack = packet::ConnAckPacket {
+            session_present: false,
+            return_code,
+        };
+        send_packet(packet::Packet::ConnAck(connack), stream).await
     }
 
     async fn on_takeover(
@@ -525,27 +532,22 @@ impl Runtime {
             session_present,
             return_code: v3::connect_return_codes::ACCEPTED,
         };
-        let mut buf = BytesMut::new();
-        packet::Packet::ConnAck(connack).encode(&mut buf);
-        match stream.write_all(&buf).await {
-            Ok(_) => {
-                self.clean_session = clean_session;
-                self.keep_alive = keep_alive;
-                if clean_session {
-                    self.broker.unsubscribe_all(&self.id).await;
-                    // Delete any saved session from storage
-                    if let Some(client_id) = &self.client_id {
-                        if let Err(e) = self.broker.storage().delete_session(client_id) {
-                            warn!("Failed to delete session {} from storage: {}", client_id, e);
-                        }
-                    }
-                    // Clear in-flight messages
-                    self.qos1_queue.clear();
+        send_packet(packet::Packet::ConnAck(connack), stream).await?;
+
+        self.clean_session = clean_session;
+        self.keep_alive = keep_alive;
+        if clean_session {
+            self.broker.unsubscribe_all(&self.id).await;
+            // Delete any saved session from storage
+            if let Some(client_id) = &self.client_id {
+                if let Err(e) = self.broker.storage().delete_session(client_id) {
+                    warn!("Failed to delete session {} from storage: {}", client_id, e);
                 }
-                Ok(())
             }
-            Err(e) => Err(e.into()),
+            // Clear in-flight messages
+            self.qos1_queue.clear();
         }
+        Ok(())
     }
 
     async fn on_packet<W: AsyncWrite + Unpin>(
@@ -576,9 +578,7 @@ impl Runtime {
         if let packet::Packet::Publish(mut pub_packet) = message {
             if pub_packet.qos == packet::QoS::AtMostOnce {
                 // QoS=0: Just send it
-                let mut buf = BytesMut::new();
-                packet::Packet::Publish(pub_packet).encode(&mut buf);
-                writer.write_all(&buf).await?;
+                send_packet(packet::Packet::Publish(pub_packet), writer).await?;
             } else if pub_packet.qos == packet::QoS::AtLeastOnce {
                 if !pub_packet.dup {
                     // QoS=1 without DUP: Assign packet ID and track it
@@ -588,9 +588,7 @@ impl Runtime {
                     debug!("Sending new QoS=1 message with packet_id={packet_id}");
 
                     // Send it immediately
-                    let mut buf = BytesMut::new();
-                    packet::Packet::Publish(pub_packet.clone()).encode(&mut buf);
-                    writer.write_all(&buf).await?;
+                    send_packet(packet::Packet::Publish(pub_packet.clone()), writer).await?;
 
                     // Add to in-flight queue with DUP flag for retransmission
                     pub_packet.dup = true;
@@ -602,9 +600,7 @@ impl Runtime {
                     self.qos1_queue.push_back(inflight);
                 } else {
                     // QoS=1 with DUP: Just send it
-                    let mut buf = BytesMut::new();
-                    packet::Packet::Publish(pub_packet).encode(&mut buf);
-                    writer.write_all(&buf).await?;
+                    send_packet(packet::Packet::Publish(pub_packet), writer).await?;
                 }
             }
         }
@@ -648,10 +644,8 @@ impl Runtime {
             if let Some(packet_id) = packet.packet_id {
                 // Always send PUBACK for QoS=1 (even for duplicates)
                 let puback = packet::PubAckPacket { packet_id };
-                let mut buf = BytesMut::new();
-                packet::Packet::PubAck(puback).encode(&mut buf);
-                writer.write_all(&buf).await?;
-                info!(
+                send_packet(packet::Packet::PubAck(puback), writer).await?;
+                debug!(
                     "Sent PUBACK for packet_id={} to session {}",
                     packet_id, self.id
                 );
@@ -698,9 +692,7 @@ impl Runtime {
             packet_id: packet.packet_id,
             return_codes,
         };
-        let mut buf = BytesMut::new();
-        packet::Packet::SubAck(suback).encode(&mut buf);
-        writer.write_all(&buf).await?;
+        send_packet(packet::Packet::SubAck(suback), writer).await?;
 
         // Then send any retained messages
         for retained_msg in retained_messages {
@@ -731,17 +723,13 @@ impl Runtime {
         let unsuback = packet::UnsubAckPacket {
             packet_id: packet.packet_id,
         };
-        let mut buf = BytesMut::new();
-        packet::Packet::UnsubAck(unsuback).encode(&mut buf);
-        writer.write_all(&buf).await?;
+        send_packet(packet::Packet::UnsubAck(unsuback), writer).await?;
         Ok(true)
     }
 
     async fn on_pingreq<W: AsyncWrite + Unpin>(&mut self, writer: &mut W) -> Result<bool> {
-        info!("PINGREQ received for session {}", self.id);
-        let mut buf = BytesMut::new();
-        packet::Packet::PingResp.encode(&mut buf);
-        writer.write_all(&buf).await?;
+        debug!("PINGREQ received for session {}", self.id);
+        send_packet(packet::Packet::PingResp, writer).await?;
         Ok(true)
     }
 
@@ -835,7 +823,7 @@ impl Runtime {
             will_message: self.will_message.as_ref().map(|w| PersistedWillMessage {
                 topic: w.topic.clone(),
                 payload: w.payload.clone(),
-                qos: StoredQoS::from(w._qos),
+                qos: StoredQoS::from(w.qos),
                 retain: w.retain,
             }),
             created_at: now,
@@ -928,7 +916,7 @@ impl Runtime {
         self.will_message = persisted_session.will_message.map(|w| WillMessage {
             topic: w.topic,
             payload: w.payload,
-            _qos: packet::QoS::from(w.qos),
+            qos: packet::QoS::from(w.qos),
             retain: w.retain,
         });
 
