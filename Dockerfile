@@ -1,5 +1,5 @@
 # Build stage with musl target for static linking
-FROM rust:alpine as builder
+FROM rust:alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache musl-dev
