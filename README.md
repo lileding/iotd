@@ -30,9 +30,9 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 
 ## Current Status
 
-**IoTD has completed Milestone 2 - QoS=1 Support! 🎉**
+**IoTD has completed Milestone 3 - Persistence Layer! 🎉**
 
-The project now has full QoS=1 "at least once" delivery guarantees with comprehensive testing and MQTT 3.1.1 specification compliance.
+The project now has full persistence support for sessions, subscriptions, in-flight messages, and retained messages. Data survives server restarts with configurable storage backends.
 
 ### Completed Features ✅
 
@@ -46,7 +46,7 @@ The project now has full QoS=1 "at least once" delivery guarantees with comprehe
 - **Protocol compliance** with validation, error codes, and client ID rules
 - **Topic validation** for both topic names and subscription filters
 - **Race-condition-free architecture** using CancellationToken
-- **Comprehensive test suite** with 85+ tests
+- **Comprehensive test suite** with 95+ tests
 
 #### Milestone 2 - QoS=1 Support ✅ **COMPLETED**
 - ✅ **QoS=1 message delivery** - "At least once" guarantee fully implemented
@@ -60,12 +60,24 @@ The project now has full QoS=1 "at least once" delivery guarantees with comprehe
 - ✅ **Comprehensive QoS=1 tests** - 10+ tests covering all scenarios
 - ✅ **Performance benchmarks** - Tested with high message throughput
 
+#### Milestone 3 - Persistence Layer ✅ **COMPLETED**
+- ✅ **Unified Storage trait** - Pluggable backend architecture
+- ✅ **InMemoryStorage** - Fast storage for development/testing
+- ✅ **SqliteStorage** - Durable storage for production
+- ✅ **Session persistence** - Restore sessions for clean_session=false clients
+- ✅ **Subscription persistence** - Subscriptions survive reconnects
+- ✅ **In-flight message persistence** - QoS=1 messages restored on reconnect
+- ✅ **Retained message persistence** - Retained messages survive restarts
+- ✅ **Atomic state save** - All-or-nothing session persistence
+- ✅ **Config-based backend selection** - Choose memory or sqlite
+
 ### Roadmap 📋
 
 #### Near-term (v0.x - v1.0)
+- **Milestone 1**: ✅ Basic MQTT Server (Completed)
 - **Milestone 2**: ✅ QoS=1 Support (Completed)
-- **Milestone 3** (Next): Persistence layer (SQLite, file-based)
-- **Milestone 4**: Security (TLS, authentication, ACLs)
+- **Milestone 3**: ✅ Persistence Layer (Completed)
+- **Milestone 4** (Next): Security (TLS, authentication, ACLs)
 - **Milestone 5**: QoS=2 "exactly once" delivery
 - **Milestone 6**: Observability (Prometheus, Grafana)
 - **Milestone 7**: Flow control & production features

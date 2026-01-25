@@ -57,6 +57,18 @@
                 <li><strong>QoS Downgrade</strong> - Proper min(publish, subscribe) handling</li>
             </ul>
 
+            <h2>Persistence Layer</h2>
+            <p>Data survives server restarts with pluggable storage backends:</p>
+            <ul>
+                <li><strong>Session Persistence</strong> - Restore sessions for clean_session=false clients</li>
+                <li><strong>Subscription Recovery</strong> - Subscriptions survive reconnects</li>
+                <li><strong>In-Flight Messages</strong> - QoS=1 messages restored on reconnect</li>
+                <li><strong>Retained Messages</strong> - Persist across server restarts</li>
+                <li><strong>InMemoryStorage</strong> - Fast storage for development/testing</li>
+                <li><strong>SqliteStorage</strong> - Durable storage for production</li>
+                <li><strong>Atomic State Save</strong> - All-or-nothing session persistence</li>
+            </ul>
+
             <h2>Architecture & Performance</h2>
             <ul class="feature-list">
                 <li>🚀 <strong>Async/Await</strong> - Built on Tokio for high concurrency</li>
@@ -82,7 +94,7 @@
                 <li>📝 <strong>Configuration Files</strong> - TOML-based configuration</li>
                 <li>🔧 <strong>CLI Arguments</strong> - Easy command-line control</li>
                 <li>📊 <strong>Structured Logging</strong> - Clear, actionable logs</li>
-                <li>🧪 <strong>Comprehensive Tests</strong> - 85+ unit and integration tests</li>
+                <li>🧪 <strong>Comprehensive Tests</strong> - 95+ unit and integration tests</li>
                 <li>📚 <strong>Documentation</strong> - Architecture and API docs</li>
                 <li>🐳 <strong>Docker Support</strong> - Minimal Alpine-based images</li>
             </ul>

@@ -81,30 +81,33 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 
 ---
 
-### Milestone 3: Persistence Layer 💾 **PLANNED**
+### Milestone 3: Persistence Layer 💾 ✅ **COMPLETED**
 **Target**: Persistent storage for messages and sessions
 
-**Features to Implement:**
-- 💾 Persistent storage interface with pluggable backends
-- 💾 Session state persistence (clean_session=false)
-- 💾 Retained message persistence
-- 💾 In-flight message persistence for QoS=1
-- 💾 File-based and SQLite storage implementations
-- 💾 Message recovery on restart
-- 💾 Storage compaction and cleanup
+**✅ Completed Features:**
+- ✅ Unified Storage trait with pluggable backends
+- ✅ InMemoryStorage for development/testing
+- ✅ SqliteStorage for production persistence
+- ✅ Session state persistence (clean_session=false)
+- ✅ Subscription persistence across reconnects
+- ✅ In-flight message persistence for QoS=1
+- ✅ Retained message persistence
+- ✅ Atomic session state save (all-or-nothing)
+- ✅ Config-based storage backend selection
+- ✅ Session restoration with CONNACK session_present flag
 
-**Technical Challenges:**
-- Efficient storage of session state
-- Fast message recovery on startup
-- Storage consistency guarantees
-- Performance optimization for persistence
+**Architecture Implemented:**
+- Storage trait abstraction for pluggable backends
+- Atomic save_session for session + subscriptions + inflight
+- Router delegates retained messages to Storage
+- Broker creates storage and passes to components
 
-**Timeline**: 6-8 weeks
-**Success Criteria**:
-- [ ] Messages and sessions survive server restarts
-- [ ] Storage backend configurable
-- [ ] Acceptable performance with persistence
-- [ ] Reliable recovery mechanisms
+**Timeline**: Completed
+**Success Criteria**: All achieved ✓
+- [✓] Messages and sessions survive server restarts
+- [✓] Storage backend configurable (memory/sqlite)
+- [✓] Acceptable performance with persistence
+- [✓] Reliable recovery mechanisms
 
 ---
 
@@ -242,11 +245,11 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 - QoS downgrade handling ✓
 - Comprehensive QoS=1 tests ✓
 
-### v0.3.0 - Persistence (Milestone 3) 💾 **NEXT**
-- Pluggable storage interface
-- Session state persistence
-- Retained message persistence
-- File and SQLite backends
+### v0.3.0 - Persistence (Milestone 3) 💾 ✅ **COMPLETED**
+- Pluggable storage interface ✓
+- Session state persistence ✓
+- Retained message persistence ✓
+- InMemory and SQLite backends ✓
 
 ### v0.4.0 - Security (Milestone 4) 🔐
 - TLS/SSL encryption
@@ -424,23 +427,23 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 
 ---
 
-## What's Next: Milestone 3 - Persistence Layer 💾
+## What's Next: Milestone 4 - Security 🔐
 
-With QoS=1 support now complete, the next major milestone focuses on adding persistence:
+With persistence now complete, the next major milestone focuses on security:
 
 **Key Features to Implement:**
-1. **Storage Interface**: Define abstract persistence API
-2. **Session Persistence**: Store session state for clean_session=false
-3. **Message Persistence**: Persist in-flight QoS=1 messages
-4. **Retained Message Storage**: Move retained messages to persistent storage
-5. **Recovery on Restart**: Restore all state after server restart
-6. **Multiple Backends**: SQLite for simplicity, file-based for performance
+1. **TLS/SSL Support**: Encrypted connections with certificate management
+2. **Username/Password Auth**: Basic authentication mechanism
+3. **Client Certificate Auth**: Mutual TLS authentication
+4. **Topic-based ACLs**: Fine-grained access control
+5. **Auth Result Caching**: Performance optimization for auth checks
+6. **Secure Defaults**: Safe out-of-the-box configuration
 
 **Preparation Tasks:**
-- Design storage schema for sessions and messages
-- Define persistence trait/interface
-- Plan migration from in-memory to persistent storage
-- Consider performance implications of persistence
+- Design authentication trait/interface
+- Plan ACL rule format and storage
+- Consider integration with external auth systems
+- Evaluate TLS library options (rustls vs native-tls)
 
 ---
 
