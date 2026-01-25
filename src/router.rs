@@ -1,5 +1,5 @@
 use crate::protocol::packet::{PublishPacket, QoS};
-use crate::protocol::v3::subscribe_return_codes::{FAILURE, MAXIMUM_QOS_0};
+use crate::protocol::v3::subscribe_return_codes::FAILURE;
 use crate::protocol::Packet;
 use crate::session::Mailbox;
 use crate::storage::{PersistedRetainedMessage, Storage, StoredQoS};
@@ -7,7 +7,21 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
+
+/// Maximum QoS level supported by the server (QoS 2 not yet implemented)
+const MAX_SUPPORTED_QOS: u8 = 1;
+
+/// Calculate effective QoS as minimum of two QoS levels, capped at server max
+fn min_qos(a: QoS, b: QoS) -> QoS {
+    let min_val = std::cmp::min(a as u8, b as u8);
+    let capped = std::cmp::min(min_val, MAX_SUPPORTED_QOS);
+    match capped {
+        0 => QoS::AtMostOnce,
+        1 => QoS::AtLeastOnce,
+        _ => QoS::AtLeastOnce, // Cap at QoS 1
+    }
+}
 
 struct RouterInternal {
     // FILTER -> (SESSION_ID -> (SENDER, QoS))
@@ -34,8 +48,8 @@ impl Router {
         }
     }
 
-    /// Validates a topic name according to MQTT v3.1.1 specification
-    fn is_valid_topic_name(topic: &str) -> bool {
+    /// Validates a topic name for PUBLISH packets (MQTT v3.1.1)
+    fn validate_publish_topic(topic: &str) -> bool {
         // Topic name must not be empty
         if topic.is_empty() {
             return false;
@@ -52,8 +66,8 @@ impl Router {
         true
     }
 
-    /// Validates a topic filter (subscription pattern)
-    fn is_valid_topic_filter(filter: &str) -> bool {
+    /// Validates a topic filter for SUBSCRIBE packets (supports wildcards)
+    fn validate_subscribe_filter(filter: &str) -> bool {
         // Topic filter must not be empty
         if filter.is_empty() {
             return false;
@@ -109,7 +123,7 @@ impl Router {
 
             for filter in topic_filters.iter() {
                 // Validate topic filter
-                if !Self::is_valid_topic_filter(&filter.0) {
+                if !Self::validate_subscribe_filter(&filter.0) {
                     info!("Invalid topic filter: {}", filter.0);
                     return_codes.push(FAILURE);
                     continue;
@@ -128,12 +142,8 @@ impl Router {
                     .or_insert(HashSet::new())
                     .insert(filter.0.to_owned());
 
-                // Grant the requested QoS level (server supports QoS 0 and 1)
-                let granted_qos = match filter.1 {
-                    QoS::AtMostOnce => MAXIMUM_QOS_0, // 0x00
-                    QoS::AtLeastOnce => 0x01,         // Grant QoS 1
-                    QoS::ExactlyOnce => 0x01,         // Downgrade QoS 2 to 1 (not supported yet)
-                };
+                // Grant minimum of requested QoS and server's maximum supported QoS
+                let granted_qos = std::cmp::min(filter.1 as u8, MAX_SUPPORTED_QOS);
                 return_codes.push(granted_qos);
                 info!(
                     "SUBSCRIBE session_id: {}, filter: {}, granted_qos: {}",
@@ -144,15 +154,7 @@ impl Router {
                 for retained in &retained_messages {
                     if Self::topic_matches(&retained.topic, &filter.0) {
                         let retained_qos = QoS::from(retained.qos);
-                        // Apply QoS downgrade for retained messages too
-                        let effective_qos = match (retained_qos, filter.1) {
-                            (QoS::AtMostOnce, _) => QoS::AtMostOnce,
-                            (_, QoS::AtMostOnce) => QoS::AtMostOnce,
-                            (QoS::AtLeastOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
-                            (QoS::AtLeastOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce,
-                            (QoS::ExactlyOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
-                            (QoS::ExactlyOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce, // We don't support QoS=2 yet
-                        };
+                        let effective_qos = min_qos(retained_qos, filter.1);
 
                         let packet = PublishPacket {
                             topic: retained.topic.clone(),
@@ -163,7 +165,7 @@ impl Router {
                             dup: false,
                         };
                         retained_to_send.push(packet);
-                        info!(
+                        debug!(
                             "Found retained message for topic {} matching filter {}, QoS {:?} -> {:?}",
                             retained.topic, filter.0, retained_qos, effective_qos
                         );
@@ -225,56 +227,14 @@ impl Router {
 
     pub async fn route(&self, packet: PublishPacket) {
         // Validate topic name
-        if !Self::is_valid_topic_name(&packet.topic) {
+        if !Self::validate_publish_topic(&packet.topic) {
             info!("Invalid topic name in PUBLISH: {}", packet.topic);
             return;
         }
 
         // Handle retained message storage
         if packet.retain {
-            if packet.payload.is_empty() {
-                // Empty payload with retain=true means delete the retained message
-                if let Err(e) = self.storage.delete_retained_message(&packet.topic) {
-                    warn!(
-                        "Failed to delete retained message for {}: {}",
-                        packet.topic, e
-                    );
-                } else {
-                    info!("Deleted retained message for topic: {}", packet.topic);
-                }
-            } else {
-                // Check if we're at the limit and this is a new topic
-                let existing = self.storage.load_retained_message(&packet.topic);
-                let count = self.storage.count_retained_messages().unwrap_or(0);
-
-                let is_new = matches!(existing, Ok(None));
-                if is_new && count >= self.retained_message_limit {
-                    info!(
-                        "Retained message limit reached ({}/{}), dropping message for topic: {}",
-                        count, self.retained_message_limit, packet.topic
-                    );
-                } else {
-                    // Store the retained message
-                    let retained = PersistedRetainedMessage {
-                        topic: packet.topic.clone(),
-                        payload: packet.payload.clone(),
-                        qos: StoredQoS::from(packet.qos),
-                        updated_at: Utc::now(),
-                    };
-                    if let Err(e) = self.storage.save_retained_message(&retained) {
-                        warn!(
-                            "Failed to save retained message for {}: {}",
-                            packet.topic, e
-                        );
-                    } else {
-                        let new_count = self.storage.count_retained_messages().unwrap_or(0);
-                        info!(
-                            "Stored retained message for topic: {} (total: {}/{})",
-                            packet.topic, new_count, self.retained_message_limit
-                        );
-                    }
-                }
-            }
+            self.handle_retained_message(&packet);
         }
 
         // Route to current subscribers
@@ -283,29 +243,21 @@ impl Router {
         for (filter, sessions) in router.filters.iter() {
             if Self::topic_matches(&packet.topic, filter) {
                 for (session_id, (sender, subscription_qos)) in sessions.iter() {
-                    // Apply QoS downgrade: use minimum of publisher QoS and subscription QoS
-                    let effective_qos = match (packet.qos, subscription_qos) {
-                        (QoS::AtMostOnce, _) => QoS::AtMostOnce,
-                        (_, QoS::AtMostOnce) => QoS::AtMostOnce,
-                        (QoS::AtLeastOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
-                        (QoS::AtLeastOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce,
-                        (QoS::ExactlyOnce, QoS::AtLeastOnce) => QoS::AtLeastOnce,
-                        (QoS::ExactlyOnce, QoS::ExactlyOnce) => QoS::AtLeastOnce, // We don't support QoS=2 yet
-                    };
+                    let effective_qos = min_qos(packet.qos, *subscription_qos);
 
                     // Create a packet for forwarding with appropriate QoS
                     // - Retain flag should be false when forwarding to existing subscribers
                     // - Packet ID should be None - each session will assign its own
                     let forward_packet = PublishPacket {
                         topic: packet.topic.clone(),
-                        packet_id: None, // Session will assign its own packet ID for QoS > 0
+                        packet_id: None,
                         payload: packet.payload.clone(),
                         qos: effective_qos,
-                        retain: false, // Always false when forwarding to existing subscribers
-                        dup: false,    // Not a duplicate when initially forwarding
+                        retain: false,
+                        dup: false,
                     };
 
-                    info!(
+                    debug!(
                         "ROUTE topic:{} session_id:{} pub_qos:{:?} sub_qos:{:?} effective_qos:{:?}",
                         packet.topic, session_id, packet.qos, subscription_qos, effective_qos
                     );
@@ -313,11 +265,58 @@ impl Router {
                         .send(Packet::Publish(forward_packet))
                         .await
                         .unwrap_or_else(|e| {
-                            info!(
+                            warn!(
                                 "Route topic {} to session {} error: {}",
                                 packet.topic, session_id, e
                             );
                         });
+                }
+            }
+        }
+    }
+
+    /// Handle retained message storage (save or delete)
+    fn handle_retained_message(&self, packet: &PublishPacket) {
+        if packet.payload.is_empty() {
+            // Empty payload with retain=true means delete the retained message
+            if let Err(e) = self.storage.delete_retained_message(&packet.topic) {
+                warn!(
+                    "Failed to delete retained message for {}: {}",
+                    packet.topic, e
+                );
+            } else {
+                info!("Deleted retained message for topic: {}", packet.topic);
+            }
+        } else {
+            // Check if we're at the limit and this is a new topic
+            let existing = self.storage.load_retained_message(&packet.topic);
+            let count = self.storage.count_retained_messages().unwrap_or(0);
+
+            let is_new = matches!(existing, Ok(None));
+            if is_new && count >= self.retained_message_limit {
+                info!(
+                    "Retained message limit reached ({}/{}), dropping message for topic: {}",
+                    count, self.retained_message_limit, packet.topic
+                );
+            } else {
+                // Store the retained message
+                let retained = PersistedRetainedMessage {
+                    topic: packet.topic.clone(),
+                    payload: packet.payload.clone(),
+                    qos: StoredQoS::from(packet.qos),
+                    updated_at: Utc::now(),
+                };
+                if let Err(e) = self.storage.save_retained_message(&retained) {
+                    warn!(
+                        "Failed to save retained message for {}: {}",
+                        packet.topic, e
+                    );
+                } else {
+                    let new_count = self.storage.count_retained_messages().unwrap_or(0);
+                    info!(
+                        "Stored retained message for topic: {} (total: {}/{})",
+                        packet.topic, new_count, self.retained_message_limit
+                    );
                 }
             }
         }
@@ -677,109 +676,115 @@ mod tests {
     #[test]
     fn test_valid_topic_names() {
         // Valid topic names
-        assert!(Router::is_valid_topic_name("home/temperature"));
-        assert!(Router::is_valid_topic_name("a"));
-        assert!(Router::is_valid_topic_name("a/b/c/d/e/f"));
-        assert!(Router::is_valid_topic_name("/"));
-        assert!(Router::is_valid_topic_name("home/"));
-        assert!(Router::is_valid_topic_name("/home"));
-        assert!(Router::is_valid_topic_name("测试")); // UTF-8
-        assert!(Router::is_valid_topic_name("🚀")); // Emoji
-        assert!(Router::is_valid_topic_name("home/kitchen/temperature/°C"));
+        assert!(Router::validate_publish_topic("home/temperature"));
+        assert!(Router::validate_publish_topic("a"));
+        assert!(Router::validate_publish_topic("a/b/c/d/e/f"));
+        assert!(Router::validate_publish_topic("/"));
+        assert!(Router::validate_publish_topic("home/"));
+        assert!(Router::validate_publish_topic("/home"));
+        assert!(Router::validate_publish_topic("测试")); // UTF-8
+        assert!(Router::validate_publish_topic("🚀")); // Emoji
+        assert!(Router::validate_publish_topic(
+            "home/kitchen/temperature/°C"
+        ));
 
         // Topics can contain wildcards when publishing (they're just literal characters)
-        assert!(Router::is_valid_topic_name("home/+/temp"));
-        assert!(Router::is_valid_topic_name("home/#"));
+        assert!(Router::validate_publish_topic("home/+/temp"));
+        assert!(Router::validate_publish_topic("home/#"));
     }
 
     #[test]
     fn test_invalid_topic_names() {
         // Empty topic
-        assert!(!Router::is_valid_topic_name(""));
+        assert!(!Router::validate_publish_topic(""));
 
         // Contains null character
-        assert!(!Router::is_valid_topic_name("home\0temperature"));
-        assert!(!Router::is_valid_topic_name("\0"));
-        assert!(!Router::is_valid_topic_name("home/\0/temp"));
+        assert!(!Router::validate_publish_topic("home\0temperature"));
+        assert!(!Router::validate_publish_topic("\0"));
+        assert!(!Router::validate_publish_topic("home/\0/temp"));
     }
 
     #[test]
     fn test_valid_topic_filters() {
         // Valid filters without wildcards
-        assert!(Router::is_valid_topic_filter("home/temperature"));
-        assert!(Router::is_valid_topic_filter("a"));
-        assert!(Router::is_valid_topic_filter("/"));
-        assert!(Router::is_valid_topic_filter("home/"));
-        assert!(Router::is_valid_topic_filter("/home"));
+        assert!(Router::validate_subscribe_filter("home/temperature"));
+        assert!(Router::validate_subscribe_filter("a"));
+        assert!(Router::validate_subscribe_filter("/"));
+        assert!(Router::validate_subscribe_filter("home/"));
+        assert!(Router::validate_subscribe_filter("/home"));
 
         // Valid single-level wildcards
-        assert!(Router::is_valid_topic_filter("+"));
-        assert!(Router::is_valid_topic_filter("home/+/temperature"));
-        assert!(Router::is_valid_topic_filter("+/+/+"));
-        assert!(Router::is_valid_topic_filter("home/+"));
-        assert!(Router::is_valid_topic_filter("+/temperature"));
+        assert!(Router::validate_subscribe_filter("+"));
+        assert!(Router::validate_subscribe_filter("home/+/temperature"));
+        assert!(Router::validate_subscribe_filter("+/+/+"));
+        assert!(Router::validate_subscribe_filter("home/+"));
+        assert!(Router::validate_subscribe_filter("+/temperature"));
 
         // Valid multi-level wildcards
-        assert!(Router::is_valid_topic_filter("#"));
-        assert!(Router::is_valid_topic_filter("home/#"));
-        assert!(Router::is_valid_topic_filter("home/kitchen/#"));
-        assert!(Router::is_valid_topic_filter("+/#"));
-        assert!(Router::is_valid_topic_filter("+/+/#"));
+        assert!(Router::validate_subscribe_filter("#"));
+        assert!(Router::validate_subscribe_filter("home/#"));
+        assert!(Router::validate_subscribe_filter("home/kitchen/#"));
+        assert!(Router::validate_subscribe_filter("+/#"));
+        assert!(Router::validate_subscribe_filter("+/+/#"));
 
         // UTF-8 is valid
-        assert!(Router::is_valid_topic_filter("测试/+/#"));
-        assert!(Router::is_valid_topic_filter("🚀/#"));
+        assert!(Router::validate_subscribe_filter("测试/+/#"));
+        assert!(Router::validate_subscribe_filter("🚀/#"));
     }
 
     #[test]
     fn test_invalid_topic_filters() {
         // Empty filter
-        assert!(!Router::is_valid_topic_filter(""));
+        assert!(!Router::validate_subscribe_filter(""));
 
         // Contains null character
-        assert!(!Router::is_valid_topic_filter("home\0temperature"));
-        assert!(!Router::is_valid_topic_filter("\0"));
-        assert!(!Router::is_valid_topic_filter("home/\0/temp"));
+        assert!(!Router::validate_subscribe_filter("home\0temperature"));
+        assert!(!Router::validate_subscribe_filter("\0"));
+        assert!(!Router::validate_subscribe_filter("home/\0/temp"));
 
         // Invalid single-level wildcard usage
-        assert!(!Router::is_valid_topic_filter("home/+a/temp")); // + not alone
-        assert!(!Router::is_valid_topic_filter("home/a+/temp")); // + not alone
-        assert!(!Router::is_valid_topic_filter("home/++/temp")); // + not alone
-        assert!(!Router::is_valid_topic_filter("home/+abc/temp")); // + not alone
+        assert!(!Router::validate_subscribe_filter("home/+a/temp")); // + not alone
+        assert!(!Router::validate_subscribe_filter("home/a+/temp")); // + not alone
+        assert!(!Router::validate_subscribe_filter("home/++/temp")); // + not alone
+        assert!(!Router::validate_subscribe_filter("home/+abc/temp")); // + not alone
 
         // Invalid multi-level wildcard usage
-        assert!(!Router::is_valid_topic_filter("home/#/temp")); // # must be last
-        assert!(!Router::is_valid_topic_filter("home/a#")); // # not alone
-        assert!(!Router::is_valid_topic_filter("home/#a")); // # not alone
-        assert!(!Router::is_valid_topic_filter("home/##")); // # not alone
-        assert!(!Router::is_valid_topic_filter("#/home")); // # must be last
-        assert!(!Router::is_valid_topic_filter("home/kitchen/#/room")); // # must be last
+        assert!(!Router::validate_subscribe_filter("home/#/temp")); // # must be last
+        assert!(!Router::validate_subscribe_filter("home/a#")); // # not alone
+        assert!(!Router::validate_subscribe_filter("home/#a")); // # not alone
+        assert!(!Router::validate_subscribe_filter("home/##")); // # not alone
+        assert!(!Router::validate_subscribe_filter("#/home")); // # must be last
+        assert!(!Router::validate_subscribe_filter("home/kitchen/#/room")); // # must be last
     }
 
     #[test]
     fn test_edge_case_validation() {
         // Just slashes
-        assert!(Router::is_valid_topic_name("/"));
-        assert!(Router::is_valid_topic_name("//"));
-        assert!(Router::is_valid_topic_name("///"));
-        assert!(Router::is_valid_topic_filter("/"));
-        assert!(Router::is_valid_topic_filter("//"));
-        assert!(Router::is_valid_topic_filter("///"));
+        assert!(Router::validate_publish_topic("/"));
+        assert!(Router::validate_publish_topic("//"));
+        assert!(Router::validate_publish_topic("///"));
+        assert!(Router::validate_subscribe_filter("/"));
+        assert!(Router::validate_subscribe_filter("//"));
+        assert!(Router::validate_subscribe_filter("///"));
 
         // Wildcards at boundaries
-        assert!(Router::is_valid_topic_filter("/+"));
-        assert!(Router::is_valid_topic_filter("+/"));
-        assert!(Router::is_valid_topic_filter("/+/"));
-        assert!(Router::is_valid_topic_filter("/#"));
-        assert!(Router::is_valid_topic_filter("/+/#"));
+        assert!(Router::validate_subscribe_filter("/+"));
+        assert!(Router::validate_subscribe_filter("+/"));
+        assert!(Router::validate_subscribe_filter("/+/"));
+        assert!(Router::validate_subscribe_filter("/#"));
+        assert!(Router::validate_subscribe_filter("/+/#"));
 
         // Multiple # in different levels (still invalid)
-        assert!(!Router::is_valid_topic_filter("#/#"));
-        assert!(!Router::is_valid_topic_filter("home/#/#"));
+        assert!(!Router::validate_subscribe_filter("#/#"));
+        assert!(!Router::validate_subscribe_filter("home/#/#"));
 
         // Mixed valid and invalid patterns
-        assert!(Router::is_valid_topic_filter("home/+/kitchen/+/sensor"));
-        assert!(!Router::is_valid_topic_filter("home/+/kitchen/#/sensor"));
-        assert!(!Router::is_valid_topic_filter("home/+a/kitchen/+/sensor"));
+        assert!(Router::validate_subscribe_filter("home/+/kitchen/+/sensor"));
+        assert!(!Router::validate_subscribe_filter(
+            "home/+/kitchen/#/sensor"
+        ));
+        assert!(!Router::validate_subscribe_filter(
+            "home/+a/kitchen/+/sensor"
+        ));
     }
 }
