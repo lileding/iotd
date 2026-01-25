@@ -25,13 +25,28 @@ pub enum StorageError {
 pub trait Storage: Send + Sync + Debug {
     // ========== Session Operations ==========
 
-    /// Save or update a session
-    fn save_session(&self, session: &PersistedSession) -> StorageResult<()>;
+    /// Save session state atomically (session + subscriptions + in-flight messages)
+    /// For clean_session=false clients on disconnect
+    fn save_session(
+        &self,
+        session: &PersistedSession,
+        subscriptions: &[PersistedSubscription],
+        inflight: &[PersistedInflightMessage],
+    ) -> StorageResult<()>;
 
     /// Load a session by client ID
     fn load_session(&self, client_id: &str) -> StorageResult<Option<PersistedSession>>;
 
-    /// Delete a session and all associated data
+    /// Load all subscriptions for a client
+    fn load_subscriptions(&self, client_id: &str) -> StorageResult<Vec<PersistedSubscription>>;
+
+    /// Load all in-flight messages for a client
+    fn load_inflight_messages(
+        &self,
+        client_id: &str,
+    ) -> StorageResult<Vec<PersistedInflightMessage>>;
+
+    /// Delete a session and all associated data (subscriptions, in-flight messages)
     fn delete_session(&self, client_id: &str) -> StorageResult<()>;
 
     /// Check if a session exists
@@ -40,50 +55,16 @@ pub trait Storage: Send + Sync + Debug {
     /// Delete expired sessions older than the given datetime
     fn delete_expired_sessions(&self, older_than: DateTime<Utc>) -> StorageResult<usize>;
 
-    // ========== Subscription Operations ==========
-
-    /// Save a subscription
-    fn save_subscription(&self, sub: &PersistedSubscription) -> StorageResult<()>;
-
-    /// Save multiple subscriptions
-    fn save_subscriptions(&self, subscriptions: &[PersistedSubscription]) -> StorageResult<()>;
-
-    /// Load all subscriptions for a client
-    fn load_subscriptions(&self, client_id: &str) -> StorageResult<Vec<PersistedSubscription>>;
-
-    /// Delete a subscription
-    fn delete_subscription(&self, client_id: &str, topic_filter: &str) -> StorageResult<()>;
-
-    /// Delete all subscriptions for a client
-    fn delete_all_subscriptions(&self, client_id: &str) -> StorageResult<()>;
-
-    // ========== In-flight Message Operations ==========
-
-    /// Save an in-flight message
-    fn save_inflight_message(&self, msg: &PersistedInflightMessage) -> StorageResult<()>;
-
-    /// Load all in-flight messages for a client
-    fn load_inflight_messages(
-        &self,
-        client_id: &str,
-    ) -> StorageResult<Vec<PersistedInflightMessage>>;
-
-    /// Delete an in-flight message (when PUBACK received)
-    fn delete_inflight_message(&self, client_id: &str, packet_id: u16) -> StorageResult<()>;
-
-    /// Delete all in-flight messages for a client
-    fn delete_all_inflight_messages(&self, client_id: &str) -> StorageResult<()>;
-
     // ========== Retained Message Operations ==========
 
-    /// Save a retained message
+    /// Save a retained message (empty payload deletes)
     fn save_retained_message(&self, msg: &PersistedRetainedMessage) -> StorageResult<()>;
 
-    /// Load a retained message by topic
+    /// Load a retained message by exact topic
     fn load_retained_message(&self, topic: &str)
         -> StorageResult<Option<PersistedRetainedMessage>>;
 
-    /// Load all retained messages
+    /// Load all retained messages (caller handles wildcard filtering)
     fn load_all_retained_messages(&self) -> StorageResult<Vec<PersistedRetainedMessage>>;
 
     /// Delete a retained message

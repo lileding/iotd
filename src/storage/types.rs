@@ -1,3 +1,4 @@
+use crate::protocol::packet::QoS;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 
@@ -21,6 +22,26 @@ impl StoredQoS {
 
     pub fn as_u8(self) -> u8 {
         self as u8
+    }
+}
+
+impl From<QoS> for StoredQoS {
+    fn from(qos: QoS) -> Self {
+        match qos {
+            QoS::AtMostOnce => StoredQoS::AtMostOnce,
+            QoS::AtLeastOnce => StoredQoS::AtLeastOnce,
+            QoS::ExactlyOnce => StoredQoS::ExactlyOnce,
+        }
+    }
+}
+
+impl From<StoredQoS> for QoS {
+    fn from(qos: StoredQoS) -> Self {
+        match qos {
+            StoredQoS::AtMostOnce => QoS::AtMostOnce,
+            StoredQoS::AtLeastOnce => QoS::AtLeastOnce,
+            StoredQoS::ExactlyOnce => QoS::ExactlyOnce,
+        }
     }
 }
 

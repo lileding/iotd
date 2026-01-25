@@ -138,10 +138,19 @@ impl SqliteStorage {
 impl Storage for SqliteStorage {
     // ========== Session Operations ==========
 
-    fn save_session(&self, session: &PersistedSession) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
+    fn save_session(
+        &self,
+        session: &PersistedSession,
+        subscriptions: &[PersistedSubscription],
+        inflight: &[PersistedInflightMessage],
+    ) -> StorageResult<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
 
-        conn.execute(
+        let client_id = &session.client_id;
+
+        // Upsert session
+        tx.execute(
             r#"
             INSERT INTO sessions (
                 client_id, next_packet_id, keep_alive,
@@ -170,6 +179,48 @@ impl Storage for SqliteStorage {
             ],
         )?;
 
+        // Replace subscriptions: delete all, then insert
+        tx.execute(
+            "DELETE FROM subscriptions WHERE client_id = ?1",
+            params![client_id],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO subscriptions (client_id, topic_filter, qos) VALUES (?1, ?2, ?3)",
+            )?;
+            for sub in subscriptions {
+                stmt.execute(params![sub.client_id, sub.topic_filter, sub.qos.as_u8()])?;
+            }
+        }
+
+        // Replace in-flight messages: delete all, then insert
+        tx.execute(
+            "DELETE FROM inflight_messages WHERE client_id = ?1",
+            params![client_id],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                INSERT INTO inflight_messages (
+                    client_id, packet_id, topic, payload, qos, retain, retry_count, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "#,
+            )?;
+            for msg in inflight {
+                stmt.execute(params![
+                    msg.client_id,
+                    msg.packet_id,
+                    msg.topic,
+                    msg.payload.to_vec(),
+                    msg.qos.as_u8(),
+                    msg.retain as i32,
+                    msg.retry_count,
+                    msg.created_at.to_rfc3339(),
+                ])?;
+            }
+        }
+
+        tx.commit()?;
         Ok(())
     }
 
@@ -270,47 +321,6 @@ impl Storage for SqliteStorage {
         Ok(count)
     }
 
-    // ========== Subscription Operations ==========
-
-    fn save_subscription(&self, sub: &PersistedSubscription) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
-
-        conn.execute(
-            r#"
-            INSERT INTO subscriptions (client_id, topic_filter, qos)
-            VALUES (?1, ?2, ?3)
-            ON CONFLICT(client_id, topic_filter) DO UPDATE SET
-                qos = excluded.qos
-            "#,
-            params![sub.client_id, sub.topic_filter, sub.qos.as_u8()],
-        )?;
-
-        Ok(())
-    }
-
-    fn save_subscriptions(&self, subscriptions: &[PersistedSubscription]) -> StorageResult<()> {
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
-
-        {
-            let mut stmt = tx.prepare(
-                r#"
-                INSERT INTO subscriptions (client_id, topic_filter, qos)
-                VALUES (?1, ?2, ?3)
-                ON CONFLICT(client_id, topic_filter) DO UPDATE SET
-                    qos = excluded.qos
-                "#,
-            )?;
-
-            for sub in subscriptions {
-                stmt.execute(params![sub.client_id, sub.topic_filter, sub.qos.as_u8()])?;
-            }
-        }
-
-        tx.commit()?;
-        Ok(())
-    }
-
     fn load_subscriptions(&self, client_id: &str) -> StorageResult<Vec<PersistedSubscription>> {
         let conn = self.conn.lock().unwrap();
 
@@ -330,56 +340,6 @@ impl Storage for SqliteStorage {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(subs)
-    }
-
-    fn delete_subscription(&self, client_id: &str, topic_filter: &str) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
-
-        conn.execute(
-            "DELETE FROM subscriptions WHERE client_id = ?1 AND topic_filter = ?2",
-            params![client_id, topic_filter],
-        )?;
-
-        Ok(())
-    }
-
-    fn delete_all_subscriptions(&self, client_id: &str) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
-
-        conn.execute(
-            "DELETE FROM subscriptions WHERE client_id = ?1",
-            params![client_id],
-        )?;
-
-        Ok(())
-    }
-
-    // ========== In-flight Message Operations ==========
-
-    fn save_inflight_message(&self, msg: &PersistedInflightMessage) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
-
-        conn.execute(
-            r#"
-            INSERT INTO inflight_messages (
-                client_id, packet_id, topic, payload, qos, retain, retry_count, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-            ON CONFLICT(client_id, packet_id) DO UPDATE SET
-                retry_count = excluded.retry_count
-            "#,
-            params![
-                msg.client_id,
-                msg.packet_id,
-                msg.topic,
-                msg.payload.to_vec(),
-                msg.qos.as_u8(),
-                msg.retain as i32,
-                msg.retry_count,
-                msg.created_at.to_rfc3339(),
-            ],
-        )?;
-
-        Ok(())
     }
 
     fn load_inflight_messages(
@@ -428,28 +388,6 @@ impl Storage for SqliteStorage {
         }
 
         Ok(messages)
-    }
-
-    fn delete_inflight_message(&self, client_id: &str, packet_id: u16) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
-
-        conn.execute(
-            "DELETE FROM inflight_messages WHERE client_id = ?1 AND packet_id = ?2",
-            params![client_id, packet_id],
-        )?;
-
-        Ok(())
-    }
-
-    fn delete_all_inflight_messages(&self, client_id: &str) -> StorageResult<()> {
-        let conn = self.conn.lock().unwrap();
-
-        conn.execute(
-            "DELETE FROM inflight_messages WHERE client_id = ?1",
-            params![client_id],
-        )?;
-
-        Ok(())
     }
 
     // ========== Retained Message Operations ==========
@@ -569,11 +507,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_session_crud() {
+    fn test_session_save_and_load() {
         let storage = SqliteStorage::in_memory().unwrap();
         let now = Utc::now();
 
-        // Create session
         let session = PersistedSession {
             client_id: "test-client".to_string(),
             next_packet_id: 100,
@@ -588,98 +525,49 @@ mod tests {
             updated_at: now,
         };
 
-        storage.save_session(&session).unwrap();
+        let subs = vec![PersistedSubscription {
+            client_id: "test-client".to_string(),
+            topic_filter: "test/#".to_string(),
+            qos: StoredQoS::AtLeastOnce,
+        }];
 
-        // Load session
-        let loaded = storage.load_session("test-client").unwrap().unwrap();
-        assert_eq!(loaded.client_id, "test-client");
-        assert_eq!(loaded.next_packet_id, 100);
-        assert_eq!(loaded.keep_alive, 60);
-        assert!(loaded.will_message.is_some());
+        let inflight = vec![PersistedInflightMessage {
+            client_id: "test-client".to_string(),
+            packet_id: 1,
+            topic: "test/topic".to_string(),
+            payload: Bytes::from("data"),
+            qos: StoredQoS::AtLeastOnce,
+            retain: false,
+            retry_count: 0,
+            created_at: now,
+        }];
 
-        let will = loaded.will_message.unwrap();
+        storage.save_session(&session, &subs, &inflight).unwrap();
+
+        // Load and verify session
+        let loaded_session = storage.load_session("test-client").unwrap().unwrap();
+        assert_eq!(loaded_session.client_id, "test-client");
+        assert_eq!(loaded_session.next_packet_id, 100);
+        assert_eq!(loaded_session.keep_alive, 60);
+
+        let will = loaded_session.will_message.unwrap();
         assert_eq!(will.topic, "will/topic");
         assert_eq!(will.payload, Bytes::from("goodbye"));
         assert_eq!(will.qos, StoredQoS::AtLeastOnce);
         assert!(will.retain);
 
-        // Check exists
+        // Load and verify subscriptions
+        let loaded_subs = storage.load_subscriptions("test-client").unwrap();
+        assert_eq!(loaded_subs.len(), 1);
+        assert_eq!(loaded_subs[0].topic_filter, "test/#");
+
+        // Load and verify inflight
+        let loaded_inflight = storage.load_inflight_messages("test-client").unwrap();
+        assert_eq!(loaded_inflight.len(), 1);
+        assert_eq!(loaded_inflight[0].packet_id, 1);
+
         assert!(storage.session_exists("test-client").unwrap());
         assert!(!storage.session_exists("nonexistent").unwrap());
-
-        // Delete session
-        storage.delete_session("test-client").unwrap();
-        assert!(!storage.session_exists("test-client").unwrap());
-    }
-
-    #[test]
-    fn test_subscription_crud() {
-        let storage = SqliteStorage::in_memory().unwrap();
-
-        // Save subscriptions
-        let subs = vec![
-            PersistedSubscription {
-                client_id: "client1".to_string(),
-                topic_filter: "topic/+/data".to_string(),
-                qos: StoredQoS::AtLeastOnce,
-            },
-            PersistedSubscription {
-                client_id: "client1".to_string(),
-                topic_filter: "sensor/#".to_string(),
-                qos: StoredQoS::AtMostOnce,
-            },
-        ];
-
-        storage.save_subscriptions(&subs).unwrap();
-
-        // Load subscriptions
-        let loaded = storage.load_subscriptions("client1").unwrap();
-        assert_eq!(loaded.len(), 2);
-
-        // Delete one subscription
-        storage
-            .delete_subscription("client1", "topic/+/data")
-            .unwrap();
-        let loaded = storage.load_subscriptions("client1").unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].topic_filter, "sensor/#");
-
-        // Delete all subscriptions
-        storage.delete_all_subscriptions("client1").unwrap();
-        let loaded = storage.load_subscriptions("client1").unwrap();
-        assert!(loaded.is_empty());
-    }
-
-    #[test]
-    fn test_inflight_message_crud() {
-        let storage = SqliteStorage::in_memory().unwrap();
-        let now = Utc::now();
-
-        // Save in-flight message
-        let msg = PersistedInflightMessage {
-            client_id: "client1".to_string(),
-            packet_id: 1,
-            topic: "test/topic".to_string(),
-            payload: Bytes::from("hello"),
-            qos: StoredQoS::AtLeastOnce,
-            retain: false,
-            retry_count: 0,
-            created_at: now,
-        };
-
-        storage.save_inflight_message(&msg).unwrap();
-
-        // Load in-flight messages
-        let loaded = storage.load_inflight_messages("client1").unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].packet_id, 1);
-        assert_eq!(loaded[0].topic, "test/topic");
-        assert_eq!(loaded[0].payload, Bytes::from("hello"));
-
-        // Delete in-flight message
-        storage.delete_inflight_message("client1", 1).unwrap();
-        let loaded = storage.load_inflight_messages("client1").unwrap();
-        assert!(loaded.is_empty());
     }
 
     #[test]
@@ -723,11 +611,10 @@ mod tests {
     }
 
     #[test]
-    fn test_session_with_subscriptions_cascade_delete() {
+    fn test_session_delete_cascades() {
         let storage = SqliteStorage::in_memory().unwrap();
         let now = Utc::now();
 
-        // Create session with subscriptions and in-flight messages
         let session = PersistedSession {
             client_id: "client1".to_string(),
             next_packet_id: 1,
@@ -736,16 +623,14 @@ mod tests {
             created_at: now,
             updated_at: now,
         };
-        storage.save_session(&session).unwrap();
 
-        let sub = PersistedSubscription {
+        let subs = vec![PersistedSubscription {
             client_id: "client1".to_string(),
             topic_filter: "test/#".to_string(),
             qos: StoredQoS::AtLeastOnce,
-        };
-        storage.save_subscription(&sub).unwrap();
+        }];
 
-        let msg = PersistedInflightMessage {
+        let inflight = vec![PersistedInflightMessage {
             client_id: "client1".to_string(),
             packet_id: 1,
             topic: "test/topic".to_string(),
@@ -754,8 +639,9 @@ mod tests {
             retain: false,
             retry_count: 0,
             created_at: now,
-        };
-        storage.save_inflight_message(&msg).unwrap();
+        }];
+
+        storage.save_session(&session, &subs, &inflight).unwrap();
 
         // Delete session should cascade to subscriptions and in-flight messages
         storage.delete_session("client1").unwrap();
@@ -785,7 +671,7 @@ mod tests {
             created_at: old_time,
             updated_at: old_time,
         };
-        storage.save_session(&old_session).unwrap();
+        storage.save_session(&old_session, &[], &[]).unwrap();
 
         // Create a recent session
         let recent_session = PersistedSession {
@@ -796,7 +682,7 @@ mod tests {
             created_at: recent_time,
             updated_at: recent_time,
         };
-        storage.save_session(&recent_session).unwrap();
+        storage.save_session(&recent_session, &[], &[]).unwrap();
 
         // Delete sessions older than 1 hour ago
         let cutoff = Utc::now() - Duration::hours(1);
