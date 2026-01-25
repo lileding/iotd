@@ -66,6 +66,11 @@ impl Router {
         true
     }
 
+    /// Check if a topic filter contains wildcards (+ or #)
+    fn has_wildcards(filter: &str) -> bool {
+        filter.contains('+') || filter.contains('#')
+    }
+
     /// Validates a topic filter for SUBSCRIBE packets (supports wildcards)
     fn validate_subscribe_filter(filter: &str) -> bool {
         // Topic filter must not be empty
@@ -109,14 +114,8 @@ impl Router {
         let mut return_codes = Vec::new();
         let mut retained_to_send = Vec::new();
 
-        // Load all retained messages from storage
-        let retained_messages = match self.storage.load_all_retained_messages() {
-            Ok(msgs) => msgs,
-            Err(e) => {
-                warn!("Failed to load retained messages: {}", e);
-                Vec::new()
-            }
-        };
+        // Lazy-load all retained messages only if needed for wildcard matching
+        let mut all_retained: Option<Vec<PersistedRetainedMessage>> = None;
 
         {
             let mut router = self.data.write().await;
@@ -133,13 +132,13 @@ impl Router {
                 router
                     .filters
                     .entry(filter.0.to_string())
-                    .or_insert(HashMap::new())
+                    .or_default()
                     .insert(session_id.to_owned(), (sender.clone(), filter.1));
                 // Store session_id -> filter
                 router
                     .sessions
                     .entry(session_id.to_owned())
-                    .or_insert(HashSet::new())
+                    .or_default()
                     .insert(filter.0.to_owned());
 
                 // Grant minimum of requested QoS and server's maximum supported QoS
@@ -151,30 +150,89 @@ impl Router {
                 );
 
                 // Find retained messages matching this subscription
-                for retained in &retained_messages {
-                    if Self::topic_matches(&retained.topic, &filter.0) {
-                        let retained_qos = QoS::from(retained.qos);
-                        let effective_qos = min_qos(retained_qos, filter.1);
-
-                        let packet = PublishPacket {
-                            topic: retained.topic.clone(),
-                            packet_id: None,
-                            payload: retained.payload.clone(),
-                            qos: effective_qos,
-                            retain: true,
-                            dup: false,
-                        };
-                        retained_to_send.push(packet);
-                        debug!(
-                            "Found retained message for topic {} matching filter {}, QoS {:?} -> {:?}",
-                            retained.topic, filter.0, retained_qos, effective_qos
-                        );
-                    }
-                }
+                self.find_retained_for_filter(
+                    &filter.0,
+                    filter.1,
+                    &mut retained_to_send,
+                    &mut all_retained,
+                );
             }
         }
 
         (return_codes, retained_to_send)
+    }
+
+    /// Find retained messages matching a subscription filter
+    fn find_retained_for_filter(
+        &self,
+        filter: &str,
+        subscription_qos: QoS,
+        retained_to_send: &mut Vec<PublishPacket>,
+        all_retained: &mut Option<Vec<PersistedRetainedMessage>>,
+    ) {
+        if Self::has_wildcards(filter) {
+            // Wildcard filter: need to check all retained messages
+            // Lazy-load all retained messages on first wildcard filter
+            if all_retained.is_none() {
+                *all_retained = match self.storage.load_all_retained_messages() {
+                    Ok(msgs) => Some(msgs),
+                    Err(e) => {
+                        warn!("Failed to load retained messages: {}", e);
+                        Some(Vec::new())
+                    }
+                };
+            }
+
+            if let Some(messages) = all_retained {
+                for retained in messages {
+                    if Self::topic_matches(&retained.topic, filter) {
+                        self.add_retained_packet(
+                            retained,
+                            subscription_qos,
+                            filter,
+                            retained_to_send,
+                        );
+                    }
+                }
+            }
+        } else {
+            // Exact filter: direct lookup is more efficient
+            match self.storage.load_retained_message(filter) {
+                Ok(Some(retained)) => {
+                    self.add_retained_packet(&retained, subscription_qos, filter, retained_to_send);
+                }
+                Ok(None) => {} // No retained message for this topic
+                Err(e) => {
+                    warn!("Failed to load retained message for {}: {}", filter, e);
+                }
+            }
+        }
+    }
+
+    /// Create and add a retained message packet to the send list
+    fn add_retained_packet(
+        &self,
+        retained: &PersistedRetainedMessage,
+        subscription_qos: QoS,
+        filter: &str,
+        retained_to_send: &mut Vec<PublishPacket>,
+    ) {
+        let retained_qos = QoS::from(retained.qos);
+        let effective_qos = min_qos(retained_qos, subscription_qos);
+
+        let packet = PublishPacket {
+            topic: retained.topic.clone(),
+            packet_id: None,
+            payload: retained.payload.clone(),
+            qos: effective_qos,
+            retain: true,
+            dup: false,
+        };
+        retained_to_send.push(packet);
+        debug!(
+            "Found retained message for topic {} matching filter {}, QoS {:?} -> {:?}",
+            retained.topic, filter, retained_qos, effective_qos
+        );
     }
 
     pub async fn unsubscribe(&self, session_id: &str, topic_filters: &[String]) {
