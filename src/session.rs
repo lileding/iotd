@@ -62,9 +62,9 @@ enum Command {
 
 #[derive(Clone, Copy)]
 enum State {
-    WaitConnect,
+    Waiting,
     Processing,
-    WaitTakeover,
+    Pending,
     Cleanup,
 }
 
@@ -165,16 +165,15 @@ impl Runtime {
     }
 
     async fn run(&mut self) {
-        let mut state = State::WaitConnect;
+        let mut state = State::Waiting;
         loop {
             state = match state {
-                State::WaitConnect => self.do_wait_connect().await,
+                State::Waiting => self.do_waiting().await,
                 State::Processing => self.do_processing().await,
-                State::WaitTakeover => self.do_wait_takeover().await,
+                State::Pending => self.do_pending().await,
                 State::Cleanup => {
                     debug!("Session {} STATE CLEANUP", self.id);
-                    // TODO: Save subscriptions and unfinished messages to persistent storage
-                    // This will be implemented in Milestone 3 for persistent session support
+                    self.publish_will().await;
                     break;
                 }
             }
@@ -182,8 +181,8 @@ impl Runtime {
         debug!("Session {} EXIT RUN", self.id);
     }
 
-    async fn do_wait_connect(&mut self) -> State {
-        debug!("Session {} STATE WAIT_CONNECT", self.id);
+    async fn do_waiting(&mut self) -> State {
+        debug!("Session {} STATE WAITING", self.id);
 
         let mut stream = match self.stream.take() {
             Some(stream) => stream,
@@ -279,7 +278,7 @@ impl Runtime {
                     };
                     if !success {
                         if !self.clean_session {
-                            next_state = State::WaitTakeover;
+                            next_state = State::Pending;
                         }
                         break;
                     }
@@ -289,7 +288,7 @@ impl Runtime {
                     if let Err(e) = self.on_message(message, &mut writer).await {
                         info!("Session {} error: {}", self.id, e);
                         if !self.clean_session {
-                            next_state = State::WaitTakeover;
+                            next_state = State::Pending;
                         }
                         break;
                     }
@@ -312,7 +311,7 @@ impl Runtime {
                             Err(e) => {
                                 info!("Session {} error: {}", self.id, e);
                                 if !clean_session {
-                                    next_state = State::WaitTakeover;
+                                    next_state = State::Pending;
                                 }
                             }
                         }
@@ -327,7 +326,7 @@ impl Runtime {
                         info!("Keep-alive timeout for session {} ({}s without activity)",
                             self.id, keep_alive_secs);
                         if !self.clean_session {
-                            next_state = State::WaitTakeover;
+                            next_state = State::Pending;
                         }
                         // Keep-alive timeout is an abnormal disconnect
                         break;
@@ -339,7 +338,7 @@ impl Runtime {
                     if let Err(e) = self.on_retransmit(&mut writer).await {
                         error!("Retransmission error: {}", e);
                         if !self.clean_session {
-                            next_state = State::WaitTakeover;
+                            next_state = State::Pending;
                         }
                         break;
                     }
@@ -347,22 +346,14 @@ impl Runtime {
             }
         }
 
-        // Publish Will message if we're exiting abnormally (going to Cleanup)
-        // but NOT if we're going to WaitTakeover (persistent session)
-        if matches!(next_state, State::Cleanup) {
-            self.publish_will().await;
-        }
-
-        // Save session state to storage when going to WaitTakeover
-        if matches!(next_state, State::WaitTakeover) {
-            self.save_to_storage().await;
-        }
-
         next_state
     }
 
-    async fn do_wait_takeover(&mut self) -> State {
-        debug!("Session {} STATE WAIT_TAKEOVER", self.id);
+    async fn do_pending(&mut self) -> State {
+        debug!("Session {} STATE PENDING", self.id);
+
+        // Save session state to storage at the beginning of Disconnected state
+        self.save_to_storage().await;
 
         match self.command_rx.recv().await {
             Some(Command::Takeover(mut stream, clean_session, keep_alive)) => {
@@ -376,7 +367,7 @@ impl Runtime {
                     }
                     Err(e) => {
                         info!("Session {} error: {}", self.id, e);
-                        State::WaitTakeover
+                        State::Pending
                     }
                 }
             }
