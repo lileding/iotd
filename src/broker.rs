@@ -18,7 +18,7 @@ pub struct Broker {
 
 impl Broker {
     pub fn new(config: Config) -> Arc<Self> {
-        let retained_message_limit = config.server.retained_message_limit;
+        let retained_message_limit = config.retained_message_limit;
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
             named_clients: DashMap::new(),

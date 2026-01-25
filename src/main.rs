@@ -105,10 +105,10 @@ async fn main() -> Result<()> {
 
     // Override listen address if provided via CLI
     if let Some(addr) = listen_address {
-        config.server.address = addr;
+        config.listen = addr;
     }
 
-    info!("Listening on: {}", config.server.address);
+    info!("Listening on: {}", config.listen);
     let server = iotd::server::start(config).await?;
 
     // Wait for Ctrl+C

@@ -239,8 +239,7 @@ impl Runtime {
         keep_alive_interval.tick().await;
 
         // Retransmission timer for QoS=1 messages
-        let retransmission_interval_ms =
-            self.broker.config().server.get_retransmission_interval_ms();
+        let retransmission_interval_ms = self.broker.config().get_retransmission_interval_ms();
         let retransmission_enabled = retransmission_interval_ms > 0;
 
         // Timer ticks at half the retransmission interval to check which messages are due
@@ -730,13 +729,12 @@ impl Runtime {
 
     async fn on_retransmit<W: AsyncWrite + Unpin>(&mut self, _writer: &mut W) -> Result<()> {
         // Get config values
-        let retransmission_interval_ms =
-            self.broker.config().server.get_retransmission_interval_ms();
+        let retransmission_interval_ms = self.broker.config().get_retransmission_interval_ms();
         if retransmission_interval_ms == 0 {
             return Ok(()); // Retransmission disabled
         }
 
-        let max_retransmission_limit = self.broker.config().server.max_retransmission_limit;
+        let max_retransmission_limit = self.broker.config().max_retransmission_limit;
         let now = Instant::now();
         let mut to_retransmit = Vec::new();
 

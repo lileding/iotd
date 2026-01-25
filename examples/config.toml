@@ -1,12 +1,11 @@
 # IoTD Example Configuration File
-# 
+#
 # This file demonstrates all available configuration options for IoTD.
 # Copy this file and modify as needed for your deployment.
 
-[server]
 # Listen address for MQTT connections
 # Examples: "127.0.0.1:1883", "0.0.0.0:1883", "[::]:1883"
-address = "0.0.0.0:1883"
+listen = "0.0.0.0:1883"
 
 # Maximum number of retained messages to store
 # Default: 10000
@@ -20,3 +19,16 @@ max_retransmission_limit = 10
 # Set to 0 to disable retransmission
 # Default: 5000 (5 seconds)
 retransmission_interval_ms = 5000
+
+[persistence]
+# Storage backend: "memory" or "sqlite"
+# Default: "memory"
+backend = "memory"
+
+# Path to SQLite database file (only used when backend = "sqlite")
+# Default: "iotd.db"
+database_path = "iotd.db"
+
+# Session expiry in seconds (0 = never expire)
+# Default: 86400 (24 hours)
+session_expiry_seconds = 86400

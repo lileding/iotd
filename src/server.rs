@@ -78,14 +78,11 @@ impl Server {
         let shutdown_token = CancellationToken::new();
 
         // Bind the listener directly to the address
-        let listener = TcpAsyncListener::bind(&self.config.server.address)
+        let listener = TcpAsyncListener::bind(&self.config.listen)
             .await
             .map_err(|e| {
                 lifecycle.state = ServerState::Stopped;
-                ServerError::StartupFailed(format!(
-                    "Failed to bind to {}: {e}",
-                    self.config.server.address
-                ))
+                ServerError::StartupFailed(format!("Failed to bind to {}: {e}", self.config.listen))
             })?;
 
         // Get the actual bound address (useful for port 0)
@@ -200,10 +197,7 @@ mod tests {
 
     fn test_config(port: u16) -> Config {
         Config {
-            server: crate::config::ServerConfig {
-                address: format!("127.0.0.1:{}", port),
-                ..Default::default()
-            },
+            listen: format!("127.0.0.1:{}", port),
             ..Default::default()
         }
     }
