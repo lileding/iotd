@@ -1,3 +1,4 @@
+use crate::auth::Authenticator;
 use crate::config::Config;
 use crate::protocol::packet::{PublishPacket, QoS};
 use crate::router::Router;
@@ -16,10 +17,15 @@ pub struct Broker {
     router: Router,
     config: Config,
     storage: Arc<dyn Storage>,
+    authenticator: Arc<dyn Authenticator>,
 }
 
 impl Broker {
-    pub fn new(config: Config, storage: Arc<dyn Storage>) -> Arc<Self> {
+    pub fn new(
+        config: Config,
+        storage: Arc<dyn Storage>,
+        authenticator: Arc<dyn Authenticator>,
+    ) -> Arc<Self> {
         let retained_message_limit = config.retained_message_limit;
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
@@ -27,6 +33,7 @@ impl Broker {
             router: Router::new(retained_message_limit, Arc::clone(&storage)),
             config,
             storage,
+            authenticator,
         })
     }
 
@@ -46,6 +53,10 @@ impl Broker {
 
     pub fn storage(&self) -> &Arc<dyn Storage> {
         &self.storage
+    }
+
+    pub fn authenticator(&self) -> &Arc<dyn Authenticator> {
+        &self.authenticator
     }
 
     pub async fn clean_all_sessions(&self) {

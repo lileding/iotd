@@ -23,6 +23,10 @@ pub struct Config {
     /// Persistence configuration
     #[serde(default)]
     pub persistence: PersistenceConfig,
+
+    /// Authentication configuration
+    #[serde(default)]
+    pub auth: AuthConfig,
 }
 
 fn default_listen() -> String {
@@ -49,6 +53,7 @@ impl Default for Config {
             max_retransmission_limit: default_max_retransmission_limit(),
             retransmission_interval_ms: default_retransmission_interval_ms(),
             persistence: PersistenceConfig::default(),
+            auth: AuthConfig::default(),
         }
     }
 }
@@ -106,6 +111,40 @@ impl Default for PersistenceConfig {
             backend: StorageBackend::default(),
             database_path: default_database_path(),
             session_expiry_seconds: default_session_expiry_seconds(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthBackend {
+    #[default]
+    #[serde(rename = "allowall")]
+    AllowAll,
+    #[serde(rename = "passwordfile")]
+    PasswordFile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    /// Auth backend: "allowall" or "passwordfile" (default: "allowall")
+    #[serde(default)]
+    pub backend: AuthBackend,
+
+    /// Path to password file (only used when backend = "passwordfile")
+    #[serde(default = "default_password_file_path")]
+    pub password_file: PathBuf,
+}
+
+fn default_password_file_path() -> PathBuf {
+    PathBuf::from("passwd")
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            backend: AuthBackend::default(),
+            password_file: default_password_file_path(),
         }
     }
 }

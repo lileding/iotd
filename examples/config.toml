@@ -32,3 +32,14 @@ database_path = "iotd.db"
 # Session expiry in seconds (0 = never expire)
 # Default: 86400 (24 hours)
 session_expiry_seconds = 86400
+
+[auth]
+# Authentication backend: "allowall" or "passwordfile"
+# Default: "allowall"
+backend = "allowall"
+
+# Path to password file (only used when backend = "passwordfile")
+# Format: one line per user, "username:password"
+# Lines starting with '#' are comments
+# Default: "passwd"
+password_file = "passwd"

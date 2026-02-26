@@ -103,6 +103,9 @@ pub struct ConnectPacket {
     pub will_retain: bool,
     pub will_topic: Option<String>,
     pub will_payload: Option<Bytes>,
+    // Auth fields
+    pub username: Option<String>,
+    pub password: Option<Bytes>,
 }
 
 #[derive(Debug, Clone)]
@@ -294,6 +297,15 @@ fn decode_connect(cursor: &mut Cursor<&[u8]>) -> Result<ConnectPacket, PacketErr
     };
     let will_retain = (connect_flags & 0x20) != 0;
 
+    // Parse auth flags
+    let username_flag = (connect_flags & 0x80) != 0;
+    let password_flag = (connect_flags & 0x40) != 0;
+
+    // MQTT 3.1.1 Section 3.1.2.9: Password Flag requires Username Flag
+    if password_flag && !username_flag {
+        return Err(PacketError::InvalidPacketFlags);
+    }
+
     // Read Will topic and payload if Will flag is set
     let (will_topic, will_payload) = if will_flag {
         let topic = decode_string(cursor)?;
@@ -303,6 +315,30 @@ fn decode_connect(cursor: &mut Cursor<&[u8]>) -> Result<ConnectPacket, PacketErr
         (Some(topic), Some(Bytes::from(payload)))
     } else {
         (None, None)
+    };
+
+    // Read Username if Username Flag is set (MQTT 3.1.1 Section 3.1.3.4)
+    let username = if username_flag {
+        Some(decode_string(cursor)?)
+    } else {
+        None
+    };
+
+    // Read Password if Password Flag is set (MQTT 3.1.1 Section 3.1.3.5)
+    // Password is binary data, not necessarily UTF-8
+    let password = if password_flag {
+        if cursor.remaining() < 2 {
+            return Err(PacketError::IncompletePacket);
+        }
+        let len = cursor.get_u16() as usize;
+        if cursor.remaining() < len {
+            return Err(PacketError::IncompletePacket);
+        }
+        let mut bytes = vec![0u8; len];
+        cursor.copy_to_slice(&mut bytes);
+        Some(Bytes::from(bytes))
+    } else {
+        None
     };
 
     Ok(ConnectPacket {
@@ -316,6 +352,8 @@ fn decode_connect(cursor: &mut Cursor<&[u8]>) -> Result<ConnectPacket, PacketErr
         will_retain,
         will_topic,
         will_payload,
+        username,
+        password,
     })
 }
 
@@ -469,6 +507,8 @@ mod tests {
             will_retain: false,
             will_topic: None,
             will_payload: None,
+            username: None,
+            password: None,
         };
 
         // Manually encode CONNECT packet
@@ -516,6 +556,8 @@ mod tests {
             will_retain: true,
             will_topic: Some("last/will".to_string()),
             will_payload: Some(Bytes::from("goodbye")),
+            username: None,
+            password: None,
         };
 
         // Manually encode CONNECT packet with Will
@@ -952,6 +994,129 @@ mod tests {
                 "Failed for dup={}, qos={:?}, retain={}",
                 dup, qos, retain
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_connect_packet_with_username_password() {
+        let mut buf = BytesMut::new();
+        buf.put_u8(0x10); // CONNECT packet type
+
+        let mut payload = BytesMut::new();
+        encode_string("MQTT", &mut payload);
+        payload.put_u8(4); // Protocol level
+        payload.put_u8(0xC2); // Connect flags: username=1, password=1, clean_session=1
+        payload.put_u16(60); // Keep alive
+        encode_string("testclient", &mut payload);
+        encode_string("myuser", &mut payload);
+        let password = b"mypassword";
+        payload.put_u16(password.len() as u16);
+        payload.put_slice(password);
+
+        encode_remaining_length(payload.len() as u32, &mut buf);
+        buf.extend_from_slice(&payload);
+
+        let mut cursor = std::io::Cursor::new(buf.as_ref());
+        let packet = Packet::decode(&mut cursor).await.unwrap();
+
+        match packet {
+            Packet::Connect(decoded) => {
+                assert_eq!(decoded.username, Some("myuser".to_string()));
+                assert_eq!(decoded.password, Some(Bytes::from("mypassword")));
+                assert_eq!(decoded.client_id, "testclient");
+                assert!(decoded.clean_session);
+            }
+            _ => panic!("Expected CONNECT packet"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_connect_packet_with_username_only() {
+        let mut buf = BytesMut::new();
+        buf.put_u8(0x10);
+
+        let mut payload = BytesMut::new();
+        encode_string("MQTT", &mut payload);
+        payload.put_u8(4);
+        payload.put_u8(0x82); // Connect flags: username=1, password=0, clean_session=1
+        payload.put_u16(60);
+        encode_string("testclient", &mut payload);
+        encode_string("myuser", &mut payload);
+
+        encode_remaining_length(payload.len() as u32, &mut buf);
+        buf.extend_from_slice(&payload);
+
+        let mut cursor = std::io::Cursor::new(buf.as_ref());
+        let packet = Packet::decode(&mut cursor).await.unwrap();
+
+        match packet {
+            Packet::Connect(decoded) => {
+                assert_eq!(decoded.username, Some("myuser".to_string()));
+                assert_eq!(decoded.password, None);
+            }
+            _ => panic!("Expected CONNECT packet"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_connect_packet_password_flag_without_username_flag() {
+        let mut buf = BytesMut::new();
+        buf.put_u8(0x10);
+
+        let mut payload = BytesMut::new();
+        encode_string("MQTT", &mut payload);
+        payload.put_u8(4);
+        payload.put_u8(0x42); // Connect flags: username=0, password=1, clean_session=1
+        payload.put_u16(60);
+        encode_string("testclient", &mut payload);
+
+        encode_remaining_length(payload.len() as u32, &mut buf);
+        buf.extend_from_slice(&payload);
+
+        let mut cursor = std::io::Cursor::new(buf.as_ref());
+        let result = Packet::decode(&mut cursor).await;
+        assert!(matches!(result, Err(PacketError::InvalidPacketFlags)));
+    }
+
+    #[tokio::test]
+    async fn test_connect_packet_with_will_and_auth() {
+        let mut buf = BytesMut::new();
+        buf.put_u8(0x10);
+
+        let mut payload = BytesMut::new();
+        encode_string("MQTT", &mut payload);
+        payload.put_u8(4);
+        // Connect flags: username=1, password=1, will_retain=0, will_qos=01, will_flag=1, clean_session=1
+        payload.put_u8(0xCE); // 11001110
+        payload.put_u16(60);
+        encode_string("testclient", &mut payload);
+        // Will topic and payload
+        encode_string("will/topic", &mut payload);
+        let will_payload = b"will message";
+        payload.put_u16(will_payload.len() as u16);
+        payload.put_slice(will_payload);
+        // Username and password
+        encode_string("myuser", &mut payload);
+        let password = b"mypass";
+        payload.put_u16(password.len() as u16);
+        payload.put_slice(password);
+
+        encode_remaining_length(payload.len() as u32, &mut buf);
+        buf.extend_from_slice(&payload);
+
+        let mut cursor = std::io::Cursor::new(buf.as_ref());
+        let packet = Packet::decode(&mut cursor).await.unwrap();
+
+        match packet {
+            Packet::Connect(decoded) => {
+                assert_eq!(decoded.client_id, "testclient");
+                assert!(decoded.will_flag);
+                assert_eq!(decoded.will_topic, Some("will/topic".to_string()));
+                assert_eq!(decoded.will_payload, Some(Bytes::from("will message")));
+                assert_eq!(decoded.username, Some("myuser".to_string()));
+                assert_eq!(decoded.password, Some(Bytes::from("mypass")));
+            }
+            _ => panic!("Expected CONNECT packet"),
         }
     }
 }

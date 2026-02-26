@@ -1,3 +1,4 @@
+use crate::auth;
 use crate::broker::Broker;
 use crate::config::Config;
 use crate::storage;
@@ -23,6 +24,8 @@ pub enum ServerError {
     Io(#[from] std::io::Error),
     #[error("Storage error: {0}")]
     Storage(#[from] storage::StorageError),
+    #[error("Auth error: {0}")]
+    Auth(#[from] auth::AuthError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,8 +61,11 @@ impl Server {
         let storage = storage::new(&config.persistence)?;
         info!("Storage backend: {:?}", config.persistence.backend);
 
+        let authenticator = auth::new(&config.auth)?;
+        info!("Auth backend: {:?}", config.auth.backend);
+
         Ok(Self {
-            broker: Broker::new(config.clone(), storage),
+            broker: Broker::new(config.clone(), storage, authenticator),
             config,
             lifecycle: Mutex::new(LifecycleState {
                 state: ServerState::Stopped,

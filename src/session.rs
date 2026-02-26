@@ -395,8 +395,8 @@ impl Runtime {
         mut stream: Box<dyn AsyncStream>,
     ) -> Result<State> {
         info!(
-            "CONNECT received: client_id={}, clean_session={}, will_flag={}",
-            connect.client_id, connect.clean_session, connect.will_flag
+            "CONNECT received: client_id={}, clean_session={}, will_flag={}, username={:?}",
+            connect.client_id, connect.clean_session, connect.will_flag, connect.username
         );
 
         // Validate protocol name and version
@@ -422,6 +422,38 @@ impl Runtime {
             info!("Client ID validation failed: {}", connect.client_id);
             self.send_connack_error(&mut stream, return_code).await?;
             return Ok(State::Cleanup);
+        }
+
+        // Authenticate the client
+        let credentials = crate::auth::Credentials {
+            username: connect.username.clone(),
+            password: connect.password.clone(),
+            client_id: connect.client_id.clone(),
+        };
+
+        match self.broker.authenticator().authenticate(&credentials).await {
+            Ok(()) => {}
+            Err(crate::auth::AuthError::InvalidCredentials) => {
+                info!(
+                    "Authentication failed for client_id={}, username={:?}",
+                    connect.client_id, connect.username
+                );
+                self.send_connack_error(
+                    &mut stream,
+                    v3::connect_return_codes::BAD_USERNAME_OR_PASSWORD,
+                )
+                .await?;
+                return Ok(State::Cleanup);
+            }
+            Err(e) => {
+                error!(
+                    "Authentication error for client_id={}: {}",
+                    connect.client_id, e
+                );
+                self.send_connack_error(&mut stream, v3::connect_return_codes::NOT_AUTHORIZED)
+                    .await?;
+                return Ok(State::Cleanup);
+            }
         }
 
         // Update session parameters
