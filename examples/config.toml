@@ -43,3 +43,15 @@ backend = "allowall"
 # Lines starting with '#' are comments
 # Default: "passwd"
 password_file = "passwd"
+
+[acl]
+# ACL (authorization) backend: "allowall" or "aclfile"
+# Default: "allowall"
+backend = "allowall"
+
+# Path to ACL file (only used when backend = "aclfile")
+# Format: one rule per line, "client_id permission topic_filter"
+# permission: pub, sub, pubsub
+# Lines starting with '#' are comments
+# Default: "acl.conf"
+acl_file = "acl.conf"

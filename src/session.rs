@@ -697,6 +697,22 @@ impl Runtime {
             }
         }
 
+        // Check publish authorization
+        let client_id = self.client_id.as_deref().unwrap_or("");
+        if self
+            .broker
+            .authorizer()
+            .authorize_publish(client_id, &packet.topic)
+            .await
+            .is_err()
+        {
+            info!(
+                "PUBLISH denied by ACL for client_id={}, topic={}",
+                client_id, packet.topic
+            );
+            return Ok(true); // Silently drop, don't route, don't disconnect
+        }
+
         // Route the message through the router (only for non-duplicates or QoS=0)
         self.broker.route(packet).await;
 
@@ -713,13 +729,51 @@ impl Runtime {
             self.id, packet.topic_filters
         );
 
-        // Handle subscription logic through router
-        let (return_codes, retained_messages) = self
-            .broker
-            .subscribe(&self.id, self.message_tx.clone(), &packet.topic_filters)
-            .await;
+        // Check subscribe authorization per topic filter
+        let client_id = self.client_id.as_deref().unwrap_or("");
+        let mut authorized_filters = Vec::new();
+        let mut denied_indices = Vec::new();
 
-        // Send SUBACK first
+        for (i, (topic_filter, qos)) in packet.topic_filters.iter().enumerate() {
+            if self
+                .broker
+                .authorizer()
+                .authorize_subscribe(client_id, topic_filter)
+                .await
+                .is_ok()
+            {
+                authorized_filters.push((topic_filter.clone(), *qos));
+            } else {
+                info!(
+                    "SUBSCRIBE denied by ACL for client_id={}, topic_filter={}",
+                    client_id, topic_filter
+                );
+                denied_indices.push(i);
+            }
+        }
+
+        // Subscribe only the authorized filters
+        let (router_codes, retained_messages) = if !authorized_filters.is_empty() {
+            self.broker
+                .subscribe(&self.id, self.message_tx.clone(), &authorized_filters)
+                .await
+        } else {
+            (vec![], vec![])
+        };
+
+        // Reconstruct return_codes with FAILURE for denied topics
+        let mut return_codes = Vec::with_capacity(packet.topic_filters.len());
+        let mut router_idx = 0;
+        for i in 0..packet.topic_filters.len() {
+            if denied_indices.contains(&i) {
+                return_codes.push(v3::subscribe_return_codes::FAILURE);
+            } else {
+                return_codes.push(router_codes[router_idx]);
+                router_idx += 1;
+            }
+        }
+
+        // Send SUBACK
         let suback = packet::SubAckPacket {
             packet_id: packet.packet_id,
             return_codes,

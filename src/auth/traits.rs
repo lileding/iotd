@@ -6,6 +6,8 @@ use thiserror::Error;
 pub enum AuthError {
     #[error("Invalid credentials")]
     InvalidCredentials,
+    #[error("Not authorized")]
+    NotAuthorized,
     #[error("Backend error: {0}")]
     BackendError(String),
     #[error("IO error: {0}")]

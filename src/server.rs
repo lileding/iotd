@@ -64,8 +64,11 @@ impl Server {
         let authenticator = auth::new(&config.auth)?;
         info!("Auth backend: {:?}", config.auth.backend);
 
+        let authorizer = auth::new_authorizer(&config.acl)?;
+        info!("ACL backend: {:?}", config.acl.backend);
+
         Ok(Self {
-            broker: Broker::new(config.clone(), storage, authenticator),
+            broker: Broker::new(config.clone(), storage, authenticator, authorizer),
             config,
             lifecycle: Mutex::new(LifecycleState {
                 state: ServerState::Stopped,

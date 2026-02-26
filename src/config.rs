@@ -27,6 +27,10 @@ pub struct Config {
     /// Authentication configuration
     #[serde(default)]
     pub auth: AuthConfig,
+
+    /// ACL (authorization) configuration
+    #[serde(default)]
+    pub acl: AclConfig,
 }
 
 fn default_listen() -> String {
@@ -54,6 +58,7 @@ impl Default for Config {
             retransmission_interval_ms: default_retransmission_interval_ms(),
             persistence: PersistenceConfig::default(),
             auth: AuthConfig::default(),
+            acl: AclConfig::default(),
         }
     }
 }
@@ -145,6 +150,40 @@ impl Default for AuthConfig {
         Self {
             backend: AuthBackend::default(),
             password_file: default_password_file_path(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AclBackend {
+    #[default]
+    #[serde(rename = "allowall")]
+    AllowAll,
+    #[serde(rename = "aclfile")]
+    AclFile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AclConfig {
+    /// ACL backend: "allowall" or "aclfile" (default: "allowall")
+    #[serde(default)]
+    pub backend: AclBackend,
+
+    /// Path to ACL file (only used when backend = "aclfile")
+    #[serde(default = "default_acl_file_path")]
+    pub acl_file: PathBuf,
+}
+
+fn default_acl_file_path() -> PathBuf {
+    PathBuf::from("acl.conf")
+}
+
+impl Default for AclConfig {
+    fn default() -> Self {
+        Self {
+            backend: AclBackend::default(),
+            acl_file: default_acl_file_path(),
         }
     }
 }

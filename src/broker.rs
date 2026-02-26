@@ -1,4 +1,4 @@
-use crate::auth::Authenticator;
+use crate::auth::{Authenticator, Authorizer};
 use crate::config::Config;
 use crate::protocol::packet::{PublishPacket, QoS};
 use crate::router::Router;
@@ -18,6 +18,7 @@ pub struct Broker {
     config: Config,
     storage: Arc<dyn Storage>,
     authenticator: Arc<dyn Authenticator>,
+    authorizer: Arc<dyn Authorizer>,
 }
 
 impl Broker {
@@ -25,6 +26,7 @@ impl Broker {
         config: Config,
         storage: Arc<dyn Storage>,
         authenticator: Arc<dyn Authenticator>,
+        authorizer: Arc<dyn Authorizer>,
     ) -> Arc<Self> {
         let retained_message_limit = config.retained_message_limit;
         Arc::new(Self {
@@ -34,6 +36,7 @@ impl Broker {
             config,
             storage,
             authenticator,
+            authorizer,
         })
     }
 
@@ -57,6 +60,10 @@ impl Broker {
 
     pub fn authenticator(&self) -> &Arc<dyn Authenticator> {
         &self.authenticator
+    }
+
+    pub fn authorizer(&self) -> &Arc<dyn Authorizer> {
+        &self.authorizer
     }
 
     pub async fn clean_all_sessions(&self) {
