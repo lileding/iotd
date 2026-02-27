@@ -1,6 +1,6 @@
 use crate::storage::{
-    PersistedInflightMessage, PersistedSession, PersistedSubscription, PersistedWillMessage,
-    StoredQoS,
+    PersistedInboundQos2Message, PersistedInflightMessage, PersistedQos2State, PersistedSession,
+    PersistedSubscription, PersistedWillMessage, StoredQoS,
 };
 use crate::{broker::Broker, protocol::packet, protocol::v3, transport::AsyncStream};
 use bytes::{Bytes, BytesMut};
@@ -1172,15 +1172,36 @@ impl Runtime {
         let persisted_inflight: Vec<PersistedInflightMessage> = self
             .inflight_queue
             .iter()
-            .map(|inflight| PersistedInflightMessage {
+            .map(|inflight| {
+                let qos2_state = inflight.qos2_state.map(|s| match s {
+                    Qos2State::AwaitingPubRec => PersistedQos2State::AwaitingPubRec,
+                    Qos2State::AwaitingPubComp => PersistedQos2State::AwaitingPubComp,
+                });
+                PersistedInflightMessage {
+                    client_id: client_id.clone(),
+                    packet_id: inflight.packet.packet_id.unwrap_or(0),
+                    topic: inflight.packet.topic.clone(),
+                    payload: inflight.packet.payload.clone(),
+                    qos: StoredQoS::from(inflight.packet.qos),
+                    retain: inflight.packet.retain,
+                    retry_count: inflight.retry_count,
+                    qos2_state,
+                    created_at: now,
+                }
+            })
+            .collect();
+
+        // Convert inbound QoS=2 messages
+        let persisted_inbound_qos2: Vec<PersistedInboundQos2Message> = self
+            .inbound_qos2
+            .iter()
+            .map(|(&packet_id, received)| PersistedInboundQos2Message {
                 client_id: client_id.clone(),
-                packet_id: inflight.packet.packet_id.unwrap_or(0),
-                topic: inflight.packet.topic.clone(),
-                payload: inflight.packet.payload.clone(),
-                qos: StoredQoS::from(inflight.packet.qos),
-                retain: inflight.packet.retain,
-                retry_count: inflight.retry_count,
-                created_at: now,
+                packet_id,
+                topic: received.packet.topic.clone(),
+                payload: received.packet.payload.clone(),
+                retain: received.packet.retain,
+                received_at: now,
             })
             .collect();
 
@@ -1189,14 +1210,16 @@ impl Runtime {
             &persisted_session,
             &persisted_subs,
             &persisted_inflight,
+            &persisted_inbound_qos2,
         ) {
             warn!("Failed to save session {} to storage: {}", client_id, e);
         } else {
             info!(
-                "Saved session {} to storage ({} subscriptions, {} inflight messages)",
+                "Saved session {} to storage ({} subscriptions, {} inflight, {} inbound qos2)",
                 client_id,
                 persisted_subs.len(),
-                persisted_inflight.len()
+                persisted_inflight.len(),
+                persisted_inbound_qos2.len()
             );
         }
     }
@@ -1237,6 +1260,18 @@ impl Runtime {
             }
         };
 
+        // Load inbound QoS=2 messages
+        let persisted_inbound_qos2 = match self.broker.storage().load_inbound_qos2_messages(client_id) {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                warn!(
+                    "Failed to load inbound QoS=2 messages for {} from storage: {}",
+                    client_id, e
+                );
+                Vec::new()
+            }
+        };
+
         // Restore session state
         self.next_packet_id = persisted_session.next_packet_id;
         self.keep_alive = persisted_session.keep_alive;
@@ -1266,13 +1301,11 @@ impl Runtime {
 
         // Restore in-flight messages
         for msg in persisted_inflight {
-            // Determine qos2_state based on QoS level
-            // TODO: Phase 6 will add proper qos2_state persistence
-            let qos2_state = if msg.qos == StoredQoS::ExactlyOnce {
-                Some(Qos2State::AwaitingPubRec) // Default to initial state
-            } else {
-                None
-            };
+            // Convert persisted qos2_state to runtime state
+            let qos2_state = msg.qos2_state.map(|s| match s {
+                PersistedQos2State::AwaitingPubRec => Qos2State::AwaitingPubRec,
+                PersistedQos2State::AwaitingPubComp => Qos2State::AwaitingPubComp,
+            });
 
             let inflight = InflightMessage {
                 packet: packet::PublishPacket {
@@ -1294,6 +1327,32 @@ impl Runtime {
             info!(
                 "Restored {} inflight messages for session {}",
                 self.inflight_queue.len(),
+                client_id
+            );
+        }
+
+        // Restore inbound QoS=2 messages
+        for msg in persisted_inbound_qos2 {
+            self.inbound_qos2.insert(
+                msg.packet_id,
+                ReceivedQos2Message {
+                    packet: packet::PublishPacket {
+                        topic: msg.topic,
+                        packet_id: Some(msg.packet_id),
+                        payload: msg.payload,
+                        qos: packet::QoS::ExactlyOnce,
+                        retain: msg.retain,
+                        dup: false,
+                    },
+                    received_at: Instant::now(),
+                },
+            );
+        }
+
+        if !self.inbound_qos2.is_empty() {
+            info!(
+                "Restored {} inbound QoS=2 messages for session {}",
+                self.inbound_qos2.len(),
                 client_id
             );
         }
