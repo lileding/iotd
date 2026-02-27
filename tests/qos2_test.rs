@@ -81,12 +81,7 @@ async fn read_suback(stream: &mut TcpStream, expected_qos: u8) {
 }
 
 /// Send QoS=2 PUBLISH and expect PUBREC
-async fn send_qos2_publish(
-    stream: &mut TcpStream,
-    topic: &str,
-    payload: &[u8],
-    packet_id: u16,
-) {
+async fn send_qos2_publish(stream: &mut TcpStream, topic: &str, payload: &[u8], packet_id: u16) {
     let remaining_len = 2 + topic.len() + 2 + payload.len();
     let mut publish_packet = vec![
         0x34, // PUBLISH with QoS=2 (0011 0100)
@@ -106,7 +101,11 @@ async fn send_qos2_publish(
 async fn read_pubrec(stream: &mut TcpStream) -> u16 {
     let mut pubrec = [0u8; 4];
     stream.read_exact(&mut pubrec).await.unwrap();
-    assert_eq!(pubrec[0], 0x50, "Expected PUBREC (0x50), got 0x{:02x}", pubrec[0]);
+    assert_eq!(
+        pubrec[0], 0x50,
+        "Expected PUBREC (0x50), got 0x{:02x}",
+        pubrec[0]
+    );
     assert_eq!(pubrec[1], 2, "PUBREC remaining length should be 2");
 
     let packet_id = ((pubrec[2] as u16) << 8) | (pubrec[3] as u16);
@@ -128,7 +127,11 @@ async fn send_pubrel(stream: &mut TcpStream, packet_id: u16) {
 async fn read_pubcomp(stream: &mut TcpStream) -> u16 {
     let mut pubcomp = [0u8; 4];
     stream.read_exact(&mut pubcomp).await.unwrap();
-    assert_eq!(pubcomp[0], 0x70, "Expected PUBCOMP (0x70), got 0x{:02x}", pubcomp[0]);
+    assert_eq!(
+        pubcomp[0], 0x70,
+        "Expected PUBCOMP (0x70), got 0x{:02x}",
+        pubcomp[0]
+    );
     assert_eq!(pubcomp[1], 2, "PUBCOMP remaining length should be 2");
 
     let packet_id = ((pubcomp[2] as u16) << 8) | (pubcomp[3] as u16);
@@ -179,7 +182,11 @@ async fn send_pubrec(stream: &mut TcpStream, packet_id: u16) {
 async fn read_pubrel(stream: &mut TcpStream) -> u16 {
     let mut pubrel = [0u8; 4];
     stream.read_exact(&mut pubrel).await.unwrap();
-    assert_eq!(pubrel[0], 0x62, "Expected PUBREL (0x62), got 0x{:02x}", pubrel[0]);
+    assert_eq!(
+        pubrel[0], 0x62,
+        "Expected PUBREL (0x62), got 0x{:02x}",
+        pubrel[0]
+    );
     assert_eq!(pubrel[1], 2, "PUBREL remaining length should be 2");
 
     let packet_id = ((pubrel[2] as u16) << 8) | (pubrel[3] as u16);
@@ -387,7 +394,10 @@ async fn test_qos2_duplicate_publish_handling() {
 
     // Should get another PUBREC for the duplicate
     let dup_packet_id = read_pubrec(&mut pub_stream).await;
-    assert_eq!(dup_packet_id, packet_id, "PUBREC for duplicate should have same packet_id");
+    assert_eq!(
+        dup_packet_id, packet_id,
+        "PUBREC for duplicate should have same packet_id"
+    );
 
     // Complete handshake
     send_pubrel(&mut pub_stream, packet_id).await;

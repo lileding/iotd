@@ -635,7 +635,9 @@ mod tests {
             created_at: now,
         }];
 
-        storage.save_session(&session, &subs, &inflight, &[]).unwrap();
+        storage
+            .save_session(&session, &subs, &inflight, &[])
+            .unwrap();
 
         // Load and verify session
         let loaded_session = storage.load_session("test-client").unwrap().unwrap();
@@ -735,7 +737,9 @@ mod tests {
             created_at: now,
         }];
 
-        storage.save_session(&session, &subs, &inflight, &[]).unwrap();
+        storage
+            .save_session(&session, &subs, &inflight, &[])
+            .unwrap();
 
         // Delete session should cascade to subscriptions and in-flight messages
         storage.delete_session("client1").unwrap();
@@ -776,7 +780,9 @@ mod tests {
             created_at: recent_time,
             updated_at: recent_time,
         };
-        storage.save_session(&recent_session, &[], &[], &[]).unwrap();
+        storage
+            .save_session(&recent_session, &[], &[], &[])
+            .unwrap();
 
         // Delete sessions older than 1 hour ago
         let cutoff = Utc::now() - Duration::hours(1);

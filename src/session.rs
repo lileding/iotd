@@ -47,7 +47,7 @@ struct Runtime {
 /// QoS=2 message state for outbound messages
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Qos2State {
-    AwaitingPubRec, // PUBLISH sent, waiting for PUBREC
+    AwaitingPubRec,  // PUBLISH sent, waiting for PUBREC
     AwaitingPubComp, // PUBREL sent, waiting for PUBCOMP
 }
 
@@ -1259,16 +1259,17 @@ impl Runtime {
         };
 
         // Load inbound QoS=2 messages
-        let persisted_inbound_qos2 = match self.broker.storage().load_inbound_qos2_messages(client_id) {
-            Ok(msgs) => msgs,
-            Err(e) => {
-                warn!(
-                    "Failed to load inbound QoS=2 messages for {} from storage: {}",
-                    client_id, e
-                );
-                Vec::new()
-            }
-        };
+        let persisted_inbound_qos2 =
+            match self.broker.storage().load_inbound_qos2_messages(client_id) {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    warn!(
+                        "Failed to load inbound QoS=2 messages for {} from storage: {}",
+                        client_id, e
+                    );
+                    Vec::new()
+                }
+            };
 
         // Restore session state
         self.next_packet_id = persisted_session.next_packet_id;

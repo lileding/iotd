@@ -15,7 +15,7 @@ pub struct InMemoryStorage {
     subscriptions: RwLock<HashMap<String, Vec<PersistedSubscription>>>, // client_id -> subs
     inflight: RwLock<HashMap<String, Vec<PersistedInflightMessage>>>,   // client_id -> messages
     inbound_qos2: RwLock<HashMap<String, Vec<PersistedInboundQos2Message>>>, // client_id -> messages
-    retained: RwLock<HashMap<String, PersistedRetainedMessage>>,        // topic -> message
+    retained: RwLock<HashMap<String, PersistedRetainedMessage>>,             // topic -> message
 }
 
 impl InMemoryStorage {
