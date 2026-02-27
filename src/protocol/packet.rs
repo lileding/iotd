@@ -81,6 +81,9 @@ pub enum Packet {
     ConnAck(ConnAckPacket),
     Publish(PublishPacket),
     PubAck(PubAckPacket),
+    PubRec(PubRecPacket),
+    PubRel(PubRelPacket),
+    PubComp(PubCompPacket),
     Subscribe(SubscribePacket),
     SubAck(SubAckPacket),
     Unsubscribe(UnsubscribePacket),
@@ -126,6 +129,21 @@ pub struct PublishPacket {
 
 #[derive(Debug, Clone)]
 pub struct PubAckPacket {
+    pub packet_id: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct PubRecPacket {
+    pub packet_id: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct PubRelPacket {
+    pub packet_id: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct PubCompPacket {
     pub packet_id: u16,
 }
 
@@ -184,6 +202,31 @@ impl Packet {
                 let packet_id = payload_cursor.get_u16();
                 Packet::PubAck(PubAckPacket { packet_id })
             }
+            PacketType::PubRec => {
+                if remaining_length != 2 {
+                    return Err(PacketError::InvalidPacketType(packet_type as u8));
+                }
+                let packet_id = payload_cursor.get_u16();
+                Packet::PubRec(PubRecPacket { packet_id })
+            }
+            PacketType::PubRel => {
+                // MQTT 3.1.1: PUBREL fixed header flags must be 0x02
+                if flags != 0x02 {
+                    return Err(PacketError::InvalidPacketFlags);
+                }
+                if remaining_length != 2 {
+                    return Err(PacketError::InvalidPacketType(packet_type as u8));
+                }
+                let packet_id = payload_cursor.get_u16();
+                Packet::PubRel(PubRelPacket { packet_id })
+            }
+            PacketType::PubComp => {
+                if remaining_length != 2 {
+                    return Err(PacketError::InvalidPacketType(packet_type as u8));
+                }
+                let packet_id = payload_cursor.get_u16();
+                Packet::PubComp(PubCompPacket { packet_id })
+            }
             PacketType::Subscribe => {
                 let packet = decode_subscribe(&mut payload_cursor)?;
                 Packet::Subscribe(packet)
@@ -205,6 +248,9 @@ impl Packet {
             Packet::ConnAck(packet) => encode_connack(packet, buf),
             Packet::Publish(packet) => encode_publish(packet, buf),
             Packet::PubAck(packet) => encode_puback(packet, buf),
+            Packet::PubRec(packet) => encode_pubrec(packet, buf),
+            Packet::PubRel(packet) => encode_pubrel(packet, buf),
+            Packet::PubComp(packet) => encode_pubcomp(packet, buf),
             Packet::SubAck(packet) => encode_suback(packet, buf),
             Packet::UnsubAck(packet) => encode_unsuback(packet, buf),
             Packet::PingResp => encode_pingresp(buf),
@@ -460,6 +506,24 @@ fn encode_publish(packet: &PublishPacket, buf: &mut BytesMut) {
 
 fn encode_puback(packet: &PubAckPacket, buf: &mut BytesMut) {
     buf.put_u8(0x40); // PUBACK packet type
+    buf.put_u8(2); // Remaining length
+    buf.put_u16(packet.packet_id);
+}
+
+fn encode_pubrec(packet: &PubRecPacket, buf: &mut BytesMut) {
+    buf.put_u8(0x50); // PUBREC packet type
+    buf.put_u8(2); // Remaining length
+    buf.put_u16(packet.packet_id);
+}
+
+fn encode_pubrel(packet: &PubRelPacket, buf: &mut BytesMut) {
+    buf.put_u8(0x62); // PUBREL packet type with flags=0x02 (required by MQTT 3.1.1)
+    buf.put_u8(2); // Remaining length
+    buf.put_u16(packet.packet_id);
+}
+
+fn encode_pubcomp(packet: &PubCompPacket, buf: &mut BytesMut) {
+    buf.put_u8(0x70); // PUBCOMP packet type
     buf.put_u8(2); // Remaining length
     buf.put_u16(packet.packet_id);
 }
