@@ -175,15 +175,19 @@ Abstracts different network protocols behind a common interface:
 
 ```rust
 pub trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {
-    fn split(self: Box<Self>) -> (Box<dyn AsyncRead + Send + Unpin>, 
-                                  Box<dyn AsyncWrite + Send + Unpin>);
+    fn into_split(self: Box<Self>) -> (Box<dyn AsyncRead + Send + Unpin>,
+                                       Box<dyn AsyncWrite + Send + Unpin>);
 }
 ```
 
 Implementations:
 - **TCP**: Standard MQTT over TCP (port 1883)
+- **TLS**: Secure MQTT over TLS (port 8883) via `tokio-rustls`
 - **WebSocket**: MQTT over WebSocket (planned)
-- **TLS**: Secure MQTT (planned)
+
+The server supports multiple simultaneous listeners. Each listen address uses a
+protocol prefix (`tcp://` or `tls://`); bare addresses default to TCP. A single
+`TlsAcceptor` is built from the `[tls]` config and shared across all TLS listeners.
 
 ### Protocol Layer (`src/protocol/`)
 
@@ -319,15 +323,18 @@ To prevent deadlocks, locks are acquired in a consistent order:
 ## Security Considerations
 
 ### Current Implementation
+- **TLS/SSL encryption** via `tokio-rustls` (configurable cert/key files)
+- **Username/password authentication** with file-based credential store
+- **Topic-based ACLs** with per-user publish/subscribe rules
+- Pluggable auth and ACL backends (`allowall`, `file`)
 - Basic protocol validation
 - Resource limits (connection count, message size)
 - Clean session isolation
 
 ### Future Enhancements
-- TLS/SSL support
-- Authentication plugins
-- Authorization framework
-- Rate limiting
+- Client certificate (mutual TLS) authentication
+- Rate limiting and connection throttling
+- External authentication integrations
 
 ## Testing Strategy
 
@@ -366,11 +373,27 @@ To prevent deadlocks, locks are acquired in a consistent order:
 
 ### Runtime Configuration
 ```toml
-[server]
-address = "0.0.0.0:1883"
+# Single address or array with optional protocol prefix
+listen = ["tcp://0.0.0.0:1883", "tls://0.0.0.0:8883"]
+
 retained_message_limit = 10000
 max_retransmission_limit = 10
 retransmission_interval_ms = 5000  # 5 seconds
+
+[persistence]
+backend = "memory"  # or "sqlite"
+
+[auth]
+backend = "allowall"  # or "file"
+# password_file = "passwd"
+
+[acl]
+backend = "allowall"  # or "file"
+# acl_file = "acl.conf"
+
+[tls]
+cert_file = "server.crt"
+key_file  = "server.key"
 ```
 
 ### Compile-time Configuration

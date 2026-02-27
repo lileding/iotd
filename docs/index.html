@@ -36,7 +36,7 @@
             <p class="description">A modern, async MQTT v3.1.1 server implementation designed for scalability, reliability, and extensibility.</p>
             <div class="cta-buttons">
                 <a href="getting-started.html" class="btn btn-primary">Get Started</a>
-                <a href="https://github.com/lileding/iotd/releases/latest" class="btn btn-secondary">Download v0.3.0</a>
+                <a href="https://github.com/lileding/iotd/releases/latest" class="btn btn-secondary">Download v0.4.0</a>
             </div>
         </div>
     </header>
@@ -54,6 +54,10 @@
                     <p>Sessions, subscriptions, and messages persist across restarts. Pluggable backends with SQLite support.</p>
                 </div>
                 <div class="feature-card">
+                    <h3>🔐 Secure by Design</h3>
+                    <p>TLS encryption, username/password authentication, and topic-based ACLs for production deployments.</p>
+                </div>
+                <div class="feature-card">
                     <h3>🔄 MQTT 3.1.1 Compliant</h3>
                     <p>Strict adherence to MQTT v3.1.1 specification with comprehensive protocol validation.</p>
                 </div>
@@ -69,7 +73,7 @@
         <div class="container">
             <h2>Quick Start</h2>
             <pre><code># Download and extract
-wget https://github.com/lileding/iotd/releases/download/v0.3.0/iotd-linux-x86_64.tar.gz
+wget https://github.com/lileding/iotd/releases/download/v0.4.0/iotd-linux-x86_64.tar.gz
 tar -xzf iotd-linux-x86_64.tar.gz
 
 # Run the server
@@ -82,24 +86,24 @@ tar -xzf iotd-linux-x86_64.tar.gz
 
     <section class="latest-release">
         <div class="container">
-            <h2>Latest Release: v0.3.0</h2>
+            <h2>Latest Release: v0.4.0</h2>
             <div class="release-info">
-                <h3>Persistence Layer Complete! 🎉</h3>
+                <h3>Security Complete! 🎉</h3>
                 <ul>
-                    <li>Session persistence for clean_session=false clients</li>
-                    <li>Subscription and in-flight message recovery</li>
-                    <li>Retained message persistence</li>
-                    <li>Pluggable storage backends (Memory, SQLite)</li>
-                    <li>95+ comprehensive tests</li>
+                    <li>TLS/SSL encryption with configurable certificates</li>
+                    <li>Multiple simultaneous listeners (TCP + TLS)</li>
+                    <li>Username/password authentication (file-based)</li>
+                    <li>Topic-based access control lists (ACLs)</li>
+                    <li>100+ comprehensive tests</li>
                 </ul>
-                <a href="https://github.com/lileding/iotd/releases/tag/v0.3.0" class="btn btn-small">View Release Notes</a>
+                <a href="https://github.com/lileding/iotd/releases/tag/v0.4.0" class="btn btn-small">View Release Notes</a>
             </div>
         </div>
     </section>
 
     <footer>
         <div class="container">
-            <p>&copy; 2024 IoTD Project. Licensed under MIT.</p>
+            <p>&copy; 2026 IoTD Project. Licensed under MIT.</p>
             <p>Built with ❤️ using Rust</p>
         </div>
     </footer>

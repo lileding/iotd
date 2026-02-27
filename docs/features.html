@@ -57,6 +57,17 @@
                 <li><strong>QoS Downgrade</strong> - Proper min(publish, subscribe) handling</li>
             </ul>
 
+            <h2>Security</h2>
+            <p>Production-grade security with TLS, authentication, and authorization:</p>
+            <ul>
+                <li><strong>TLS Encryption</strong> - Secure connections via <code>tls://</code> listener prefix</li>
+                <li><strong>Multiple Listeners</strong> - TCP and TLS simultaneously on different ports</li>
+                <li><strong>Username/Password Auth</strong> - File-based credential management</li>
+                <li><strong>Topic-based ACLs</strong> - Per-user publish/subscribe access rules</li>
+                <li><strong>Pluggable Backends</strong> - <code>allowall</code> (default) and <code>file</code> backends for auth and ACL</li>
+                <li><strong>Backward Compatible Config</strong> - <code>listen</code> accepts string or array</li>
+            </ul>
+
             <h2>Persistence Layer</h2>
             <p>Data survives server restarts with pluggable storage backends:</p>
             <ul>
@@ -94,7 +105,7 @@
                 <li>📝 <strong>Configuration Files</strong> - TOML-based configuration</li>
                 <li>🔧 <strong>CLI Arguments</strong> - Easy command-line control</li>
                 <li>📊 <strong>Structured Logging</strong> - Clear, actionable logs</li>
-                <li>🧪 <strong>Comprehensive Tests</strong> - 95+ unit and integration tests</li>
+                <li>🧪 <strong>Comprehensive Tests</strong> - 100+ unit and integration tests</li>
                 <li>📚 <strong>Documentation</strong> - Architecture and API docs</li>
                 <li>🐳 <strong>Docker Support</strong> - Minimal Alpine-based images</li>
             </ul>
@@ -112,7 +123,7 @@
 
     <footer>
         <div class="container">
-            <p>&copy; 2024 IoTD Project. Licensed under MIT.</p>
+            <p>&copy; 2026 IoTD Project. Licensed under MIT.</p>
             <p>Built with ❤️ using Rust</p>
         </div>
     </footer>

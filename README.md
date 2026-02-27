@@ -15,24 +15,28 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 ## Features
 
 - **MQTT v3.1.1 protocol support** with all packet types
+- **QoS=0 and QoS=1** message delivery with retransmission and DUP detection
 - **Message routing** with full MQTT wildcard support (`+` single-level, `#` multi-level)
 - **Clean session** with session takeover and proper cleanup
 - **Keep-alive mechanism** with configurable timeouts
 - **Retained messages** with storage limits and wildcard delivery
 - **Will messages** (Last Will and Testament) support
+- **Pluggable persistence** - InMemory and SQLite storage backends
+- **TLS/SSL support** - Encrypted connections with certificate-based config
+- **Multiple listen addresses** - TCP and TLS listeners simultaneously
+- **Username/password authentication** - File-based credential management
+- **Topic-based ACLs** - Fine-grained publish/subscribe access control
 - **Event-driven architecture** using tokio::select! for high performance
 - **Race-condition-free shutdown** using CancellationToken
-- **Multi-broker architecture** supporting multiple transport protocols
-- **Thread-safe operations** with optimal concurrent access patterns
 - **UNIX signal handling** (SIGINT graceful, SIGTERM immediate)
 - **Comprehensive configuration** with TOML support
-- **Extensive test coverage** with 74 tests validating all functionality
+- **Extensive test coverage** with 100+ tests validating all functionality
 
 ## Current Status
 
-**IoTD has completed Milestone 3 - Persistence Layer! 🎉**
+**IoTD has completed Milestone 4 - Security! 🎉**
 
-The project now has full persistence support for sessions, subscriptions, in-flight messages, and retained messages. Data survives server restarts with configurable storage backends.
+The project now has full security support including TLS encryption, username/password authentication, and topic-based access control lists.
 
 ### Completed Features ✅
 
@@ -71,14 +75,23 @@ The project now has full persistence support for sessions, subscriptions, in-fli
 - ✅ **Atomic state save** - All-or-nothing session persistence
 - ✅ **Config-based backend selection** - Choose memory or sqlite
 
+#### Milestone 4 - Security ✅ **COMPLETED**
+- ✅ **TLS/SSL support** - Encrypted connections via `tls://` listener prefix
+- ✅ **Multiple listen addresses** - Serve TCP and TLS simultaneously
+- ✅ **Username/password authentication** - File-based user credentials
+- ✅ **Topic-based ACLs** - Fine-grained publish/subscribe access control
+- ✅ **Pluggable auth backend** - `allowall` and `file` backends
+- ✅ **Config-based TLS** - Certificate and key file paths in TOML
+- ✅ **TLS integration tests** - Self-signed cert testing with rcgen
+
 ### Roadmap 📋
 
 #### Near-term (v0.x - v1.0)
 - **Milestone 1**: ✅ Basic MQTT Server (Completed)
 - **Milestone 2**: ✅ QoS=1 Support (Completed)
 - **Milestone 3**: ✅ Persistence Layer (Completed)
-- **Milestone 4** (Next): Security (TLS, authentication, ACLs)
-- **Milestone 5**: QoS=2 "exactly once" delivery
+- **Milestone 4**: ✅ Security - TLS, Authentication, ACLs (Completed)
+- **Milestone 5** (Next): QoS=2 "exactly once" delivery
 - **Milestone 6**: Observability (Prometheus, Grafana)
 - **Milestone 7**: Flow control & production features
 - **v1.0**: Production-ready single-node broker
@@ -146,9 +159,9 @@ cargo run
 ./target/release/iotd
 
 # Custom listen address
-./target/release/iotd -l 0.0.0.0:1883    # All IPv4 interfaces
-./target/release/iotd -l [::]:1883       # All IPv6 interfaces
-./target/release/iotd -l 127.0.0.1:8883  # Custom port
+./target/release/iotd -l 0.0.0.0:1883          # All IPv4 interfaces
+./target/release/iotd -l [::]:1883             # All IPv6 interfaces
+./target/release/iotd -l tls://0.0.0.0:8883   # TLS (requires [tls] in config)
 
 # Help and version
 ./target/release/iotd --help
@@ -217,30 +230,39 @@ mqttx pub -h localhost -t "test/topic" -m "hello world"
 The server uses a comprehensive configuration system with TOML support:
 
 ```toml
-[server]
-listen_addresses = ["tcp://0.0.0.0:1883", "ws://0.0.0.0:9001"]
-max_connections = 10000
-session_timeout_secs = 300
-keep_alive_timeout_secs = 60
-max_packet_size = 1048576
+# Listen addresses (single string or array, with optional protocol prefix)
+listen = ["tcp://0.0.0.0:1883", "tls://0.0.0.0:8883"]
+
+# Maximum retained messages
 retained_message_limit = 10000
 
-[auth]
-enabled = false
-backend = "none"
+# QoS=1 retransmission settings
+retransmission_interval_ms = 5000
+max_retransmission_limit = 10
 
-[storage]
+# Persistence backend: "memory" (default) or "sqlite"
+[persistence]
 backend = "memory"
 
-[logging]
-level = "info"
-format = "text"
+# Authentication backend: "allowall" (default) or "file"
+[auth]
+backend = "allowall"
+# password_file = "passwd"
+
+# ACL backend: "allowall" (default) or "file"
+[acl]
+backend = "allowall"
+# acl_file = "acl.conf"
+
+# TLS configuration (required when any listener uses tls://)
+[tls]
+cert_file = "server.crt"
+key_file = "server.key"
 ```
 
 Configuration can be provided through:
-- Configuration files (TOML)
-- Environment variables
-- Command-line arguments
+- Configuration files (TOML) via `-c config.toml`
+- Command-line arguments (`-l` for listen address)
 - Default values
 
 ## License

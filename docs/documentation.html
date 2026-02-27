@@ -116,13 +116,14 @@
             </ul>
 
             <h2>Configuration Reference</h2>
-            
+
             <h3>Server Configuration</h3>
             <div class="code-block">
-                <pre>[server]
-# Network address to listen on
-# Format: "ip:port" or "[ipv6]:port"
-address = "0.0.0.0:1883"
+                <pre># Listen addresses with optional protocol prefix
+# Accepts a single string or an array:
+#   listen = "0.0.0.0:1883"
+#   listen = ["tcp://0.0.0.0:1883", "tls://0.0.0.0:8883"]
+listen = "127.0.0.1:1883"
 
 # Maximum number of retained messages to store
 # Default: 10000
@@ -133,9 +134,23 @@ retained_message_limit = 10000
 max_retransmission_limit = 10
 
 # Interval between retransmission attempts (milliseconds)
-# Set to 0 to disable retransmission
 # Default: 5000 (5 seconds)
-retransmission_interval_ms = 5000</pre>
+retransmission_interval_ms = 5000
+
+# Authentication backend: "allowall" (default) or "file"
+[auth]
+backend = "allowall"
+# password_file = "passwd"   # required for "file" backend
+
+# ACL backend: "allowall" (default) or "file"
+[acl]
+backend = "allowall"
+# acl_file = "acl.conf"      # required for "file" backend
+
+# TLS configuration (required when any listener uses tls://)
+# [tls]
+# cert_file = "server.crt"
+# key_file  = "server.key"</pre>
             </div>
 
             <h2>Development</h2>
@@ -228,7 +243,7 @@ RUST_LOG=trace iotd</pre>
 
     <footer>
         <div class="container">
-            <p>&copy; 2024 IoTD Project. Licensed under MIT.</p>
+            <p>&copy; 2026 IoTD Project. Licensed under MIT.</p>
             <p>Built with ❤️ using Rust</p>
         </div>
     </footer>

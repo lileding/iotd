@@ -39,7 +39,7 @@
             <p>The easiest way to get started is to download the pre-built binary from our releases page:</p>
             <div class="code-block">
                 <pre># Download the latest release
-wget https://github.com/lileding/iotd/releases/download/v0.2.0/iotd-linux-x86_64.tar.gz
+wget https://github.com/lileding/iotd/releases/download/v0.4.0/iotd-linux-x86_64.tar.gz
 
 # Extract the archive
 tar -xzf iotd-linux-x86_64.tar.gz
@@ -95,21 +95,51 @@ docker run -p 1883:1883 iotd</pre>
             <h3>Configuration File</h3>
             <p>Create a configuration file (config.toml) for more control:</p>
             <div class="code-block">
-                <pre>[server]
-# Listen address for MQTT connections
-address = "0.0.0.0:1883"
+                <pre># Listen addresses (single string or array, with optional protocol prefix)
+listen = "0.0.0.0:1883"
+# listen = ["tcp://0.0.0.0:1883", "tls://0.0.0.0:8883"]
 
 # Maximum number of retained messages
 retained_message_limit = 10000
 
 # QoS=1 retransmission settings
 max_retransmission_limit = 10
-retransmission_interval_ms = 5000</pre>
+retransmission_interval_ms = 5000
+
+# Authentication backend: "allowall" (default) or "file"
+[auth]
+backend = "allowall"
+# password_file = "passwd"
+
+# ACL backend: "allowall" (default) or "file"
+[acl]
+backend = "allowall"
+# acl_file = "acl.conf"
+
+# TLS configuration (required when any listener uses tls://)
+# [tls]
+# cert_file = "server.crt"
+# key_file  = "server.key"</pre>
             </div>
 
             <p>Run with configuration file:</p>
             <div class="code-block">
                 <pre>iotd -c config.toml</pre>
+            </div>
+
+            <h3>TLS Setup</h3>
+            <p>To enable TLS, add a <code>[tls]</code> section to your config and use the <code>tls://</code> prefix:</p>
+            <div class="code-block">
+                <pre># Generate a self-signed certificate (for testing)
+openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt \
+    -days 365 -nodes -subj '/CN=localhost'
+
+# config.toml
+listen = ["tcp://0.0.0.0:1883", "tls://0.0.0.0:8883"]
+
+[tls]
+cert_file = "server.crt"
+key_file  = "server.key"</pre>
             </div>
 
             <h2>Testing Your Installation</h2>
@@ -173,7 +203,7 @@ OPTIONS:
 
     <footer>
         <div class="container">
-            <p>&copy; 2024 IoTD Project. Licensed under MIT.</p>
+            <p>&copy; 2026 IoTD Project. Licensed under MIT.</p>
             <p>Built with ❤️ using Rust</p>
         </div>
     </footer>
