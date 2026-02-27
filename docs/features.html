@@ -38,7 +38,7 @@
                 <li>✅ <strong>MQTT v3.1.1 Protocol Support</strong> - Full implementation of all packet types</li>
                 <li>✅ <strong>QoS=0 (At Most Once)</strong> - Fire-and-forget message delivery</li>
                 <li>✅ <strong>QoS=1 (At Least Once)</strong> - Reliable delivery with acknowledgments</li>
-                <li>🚧 <strong>QoS=2 (Exactly Once)</strong> - Coming in Milestone 5</li>
+                <li>✅ <strong>QoS=2 (Exactly Once)</strong> - Guaranteed exactly-once delivery</li>
                 <li>✅ <strong>Wildcard Subscriptions</strong> - Support for + and # wildcards</li>
                 <li>✅ <strong>Retained Messages</strong> - Store and deliver last known good values</li>
                 <li>✅ <strong>Will Messages</strong> - Last Will and Testament support</li>
@@ -57,6 +57,18 @@
                 <li><strong>QoS Downgrade</strong> - Proper min(publish, subscribe) handling</li>
             </ul>
 
+            <h2>Quality of Service Level 2</h2>
+            <p>Our QoS=2 implementation guarantees exactly-once delivery with:</p>
+            <ul>
+                <li><strong>Four-Step Handshake</strong> - PUBLISH → PUBREC → PUBREL → PUBCOMP</li>
+                <li><strong>State Machine</strong> - AwaitingPubRec and AwaitingPubComp states</li>
+                <li><strong>Inbound Tracking</strong> - Proper handling of received QoS=2 messages</li>
+                <li><strong>Outbound Delivery</strong> - QoS=2 delivery to subscribers</li>
+                <li><strong>Retransmission</strong> - Automatic retry for PUBLISH and PUBREL</li>
+                <li><strong>State Persistence</strong> - QoS=2 state survives server restarts</li>
+                <li><strong>Duplicate Detection</strong> - Proper handling of duplicate messages</li>
+            </ul>
+
             <h2>Security</h2>
             <p>Production-grade security with TLS, authentication, and authorization:</p>
             <ul>
@@ -73,7 +85,8 @@
             <ul>
                 <li><strong>Session Persistence</strong> - Restore sessions for clean_session=false clients</li>
                 <li><strong>Subscription Recovery</strong> - Subscriptions survive reconnects</li>
-                <li><strong>In-Flight Messages</strong> - QoS=1 messages restored on reconnect</li>
+                <li><strong>In-Flight Messages</strong> - QoS=1 and QoS=2 messages restored on reconnect</li>
+                <li><strong>QoS=2 State</strong> - Inbound QoS=2 messages persist across restarts</li>
                 <li><strong>Retained Messages</strong> - Persist across server restarts</li>
                 <li><strong>InMemoryStorage</strong> - Fast storage for development/testing</li>
                 <li><strong>SqliteStorage</strong> - Durable storage for production</li>

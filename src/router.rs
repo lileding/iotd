@@ -9,8 +9,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-/// Maximum QoS level supported by the server (QoS 2 not yet implemented)
-const MAX_SUPPORTED_QOS: u8 = 1;
+/// Maximum QoS level supported by the server
+const MAX_SUPPORTED_QOS: u8 = 2;
 
 /// Calculate effective QoS as minimum of two QoS levels, capped at server max
 fn min_qos(a: QoS, b: QoS) -> QoS {
@@ -19,7 +19,8 @@ fn min_qos(a: QoS, b: QoS) -> QoS {
     match capped {
         0 => QoS::AtMostOnce,
         1 => QoS::AtLeastOnce,
-        _ => QoS::AtLeastOnce, // Cap at QoS 1
+        2 => QoS::ExactlyOnce,
+        _ => QoS::ExactlyOnce, // Cap at QoS 2
     }
 }
 

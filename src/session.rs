@@ -1,11 +1,16 @@
 use crate::storage::{
-    PersistedInflightMessage, PersistedSession, PersistedSubscription, PersistedWillMessage,
-    StoredQoS,
+    PersistedInboundQos2Message, PersistedInflightMessage, PersistedQos2State, PersistedSession,
+    PersistedSubscription, PersistedWillMessage, StoredQoS,
 };
 use crate::{broker::Broker, protocol::packet, protocol::v3, transport::AsyncStream};
 use bytes::{Bytes, BytesMut};
 use chrono::Utc;
-use std::{collections::VecDeque, future::Future, pin::Pin, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
 use thiserror::Error;
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt},
@@ -35,7 +40,15 @@ struct Runtime {
     keep_alive: u16,
     will_message: Option<WillMessage>,
     next_packet_id: u16, // For generating packet IDs for outgoing QoS > 0 messages
-    qos1_queue: VecDeque<InflightMessage>, // In-flight QoS=1 messages
+    inflight_queue: VecDeque<InflightMessage>, // In-flight QoS=1 and QoS=2 messages
+    inbound_qos2: HashMap<u16, ReceivedQos2Message>, // Inbound QoS=2 messages awaiting PUBREL
+}
+
+/// QoS=2 message state for outbound messages
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Qos2State {
+    AwaitingPubRec,  // PUBLISH sent, waiting for PUBREC
+    AwaitingPubComp, // PUBREL sent, waiting for PUBCOMP
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +56,13 @@ struct InflightMessage {
     packet: packet::PublishPacket,
     timestamp: Instant,
     retry_count: u32,
+    qos2_state: Option<Qos2State>, // None for QoS=1, Some for QoS=2
+}
+
+/// Inbound QoS=2 message waiting for PUBREL
+#[derive(Debug, Clone)]
+struct ReceivedQos2Message {
+    packet: packet::PublishPacket,
 }
 
 pub type Mailbox = mpsc::Sender<packet::Packet>;
@@ -123,7 +143,8 @@ impl Session {
                     keep_alive: 0,
                     will_message: None,
                     next_packet_id: 1, // Start from 1, 0 is reserved
-                    qos1_queue: VecDeque::new(),
+                    inflight_queue: VecDeque::new(),
+                    inbound_qos2: HashMap::new(),
                 };
 
                 runtime.run().await;
@@ -577,7 +598,7 @@ impl Runtime {
                 }
             }
             // Clear in-flight messages
-            self.qos1_queue.clear();
+            self.inflight_queue.clear();
         }
         Ok(())
     }
@@ -591,6 +612,9 @@ impl Runtime {
         match pack {
             packet::Packet::Publish(p) => self.on_publish(p, writer).await,
             packet::Packet::PubAck(p) => self.on_puback(p, writer).await,
+            packet::Packet::PubRec(p) => self.on_pubrec(p, writer).await,
+            packet::Packet::PubRel(p) => self.on_pubrel(p, writer).await,
+            packet::Packet::PubComp(p) => self.on_pubcomp(p, writer).await,
             packet::Packet::Subscribe(p) => self.on_subscribe(p, writer).await,
             packet::Packet::Unsubscribe(p) => self.on_unsubscribe(p, writer).await,
             packet::Packet::PingReq => self.on_pingreq(writer).await,
@@ -628,10 +652,35 @@ impl Runtime {
                         packet: pub_packet,
                         timestamp: Instant::now(),
                         retry_count: 0,
+                        qos2_state: None, // QoS=1
                     };
-                    self.qos1_queue.push_back(inflight);
+                    self.inflight_queue.push_back(inflight);
                 } else {
                     // QoS=1 with DUP: Just send it
+                    send_packet(packet::Packet::Publish(pub_packet), writer).await?;
+                }
+            } else if pub_packet.qos == packet::QoS::ExactlyOnce {
+                if !pub_packet.dup {
+                    // QoS=2 without DUP: Assign packet ID and track it
+                    let packet_id = self.next_packet_id();
+                    pub_packet.packet_id = Some(packet_id);
+
+                    debug!("Sending new QoS=2 message with packet_id={packet_id}");
+
+                    // Send it immediately
+                    send_packet(packet::Packet::Publish(pub_packet.clone()), writer).await?;
+
+                    // Add to in-flight queue with DUP flag and QoS=2 state
+                    pub_packet.dup = true;
+                    let inflight = InflightMessage {
+                        packet: pub_packet,
+                        timestamp: Instant::now(),
+                        retry_count: 0,
+                        qos2_state: Some(Qos2State::AwaitingPubRec),
+                    };
+                    self.inflight_queue.push_back(inflight);
+                } else {
+                    // QoS=2 with DUP: Just send it (retransmission)
                     send_packet(packet::Packet::Publish(pub_packet), writer).await?;
                 }
             }
@@ -650,12 +699,137 @@ impl Runtime {
         );
 
         // Find and remove the acknowledged message from in-flight queue
-        self.qos1_queue
+        self.inflight_queue
             .retain(|inflight| inflight.packet.packet_id != Some(packet.packet_id));
 
         debug!(
             "Removed acknowledged message, {} messages still in-flight",
-            self.qos1_queue.len()
+            self.inflight_queue.len()
+        );
+
+        Ok(true)
+    }
+
+    /// Handle PUBREC from client (we are sender, client acknowledged receipt)
+    async fn on_pubrec<W: AsyncWrite + Unpin>(
+        &mut self,
+        packet: packet::PubRecPacket,
+        writer: &mut W,
+    ) -> Result<bool> {
+        info!(
+            "PUBREC received for session {}: packet_id={}",
+            self.id, packet.packet_id
+        );
+
+        // Find the message in inflight queue and update state to AwaitingPubComp
+        let mut found = false;
+        for inflight in self.inflight_queue.iter_mut() {
+            if inflight.packet.packet_id == Some(packet.packet_id)
+                && inflight.qos2_state == Some(Qos2State::AwaitingPubRec)
+            {
+                inflight.qos2_state = Some(Qos2State::AwaitingPubComp);
+                inflight.timestamp = Instant::now(); // Reset for PUBREL retransmission
+                inflight.retry_count = 0;
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            // Could be a duplicate PUBREC for a message we already processed
+            debug!(
+                "PUBREC for unknown or already-processed packet_id={}",
+                packet.packet_id
+            );
+        }
+
+        // Send PUBREL regardless (idempotent response)
+        let pubrel = packet::PubRelPacket {
+            packet_id: packet.packet_id,
+        };
+        send_packet(packet::Packet::PubRel(pubrel), writer).await?;
+        debug!(
+            "Sent PUBREL for packet_id={} to session {}",
+            packet.packet_id, self.id
+        );
+
+        Ok(true)
+    }
+
+    /// Handle PUBREL from client (client is releasing message, we should route it)
+    async fn on_pubrel<W: AsyncWrite + Unpin>(
+        &mut self,
+        packet: packet::PubRelPacket,
+        writer: &mut W,
+    ) -> Result<bool> {
+        info!(
+            "PUBREL received for session {}: packet_id={}",
+            self.id, packet.packet_id
+        );
+
+        // Send PUBCOMP first (even if we don't have the message, for idempotency)
+        let pubcomp = packet::PubCompPacket {
+            packet_id: packet.packet_id,
+        };
+        send_packet(packet::Packet::PubComp(pubcomp), writer).await?;
+        debug!(
+            "Sent PUBCOMP for packet_id={} to session {}",
+            packet.packet_id, self.id
+        );
+
+        // Remove message from inbound_qos2 and route it
+        if let Some(received) = self.inbound_qos2.remove(&packet.packet_id) {
+            // Check publish authorization before routing
+            let client_id = self.client_id.as_deref().unwrap_or("");
+            if self
+                .broker
+                .authorizer()
+                .authorize_publish(client_id, &received.packet.topic)
+                .await
+                .is_err()
+            {
+                info!(
+                    "QoS=2 PUBLISH denied by ACL for client_id={}, topic={}",
+                    client_id, received.packet.topic
+                );
+                return Ok(true); // Silently drop, don't route
+            }
+
+            // Route the message
+            self.broker.route(received.packet).await;
+            debug!(
+                "Routed QoS=2 message for packet_id={} from session {}",
+                packet.packet_id, self.id
+            );
+        } else {
+            // Already processed or unknown - normal for retransmissions
+            debug!(
+                "PUBREL for unknown packet_id={}, already processed",
+                packet.packet_id
+            );
+        }
+
+        Ok(true)
+    }
+
+    /// Handle PUBCOMP from client (QoS=2 complete, we can remove from inflight)
+    async fn on_pubcomp<W: AsyncWrite + Unpin>(
+        &mut self,
+        packet: packet::PubCompPacket,
+        _writer: &mut W,
+    ) -> Result<bool> {
+        info!(
+            "PUBCOMP received for session {}: packet_id={}",
+            self.id, packet.packet_id
+        );
+
+        // Remove the message from inflight queue
+        self.inflight_queue
+            .retain(|inflight| inflight.packet.packet_id != Some(packet.packet_id));
+
+        debug!(
+            "QoS=2 exchange complete, {} messages still in-flight",
+            self.inflight_queue.len()
         );
 
         Ok(true)
@@ -693,6 +867,46 @@ impl Runtime {
             } else {
                 // QoS=1 requires packet_id
                 error!("QoS=1 PUBLISH missing packet_id from session {}", self.id);
+                return Ok(false); // Disconnect on protocol violation
+            }
+        }
+
+        // Handle QoS=2: Store message and send PUBREC, wait for PUBREL to route
+        if packet.qos == packet::QoS::ExactlyOnce {
+            if let Some(packet_id) = packet.packet_id {
+                // Check if this is a duplicate (we already have this packet_id)
+                if self.inbound_qos2.contains_key(&packet_id) {
+                    // Duplicate: resend PUBREC
+                    let pubrec = packet::PubRecPacket { packet_id };
+                    send_packet(packet::Packet::PubRec(pubrec), writer).await?;
+                    debug!(
+                        "Resent PUBREC for duplicate QoS=2 packet_id={} to session {}",
+                        packet_id, self.id
+                    );
+                    return Ok(true);
+                }
+
+                // Store message for later routing when PUBREL arrives
+                self.inbound_qos2.insert(
+                    packet_id,
+                    ReceivedQos2Message {
+                        packet: packet.clone(),
+                    },
+                );
+
+                // Send PUBREC
+                let pubrec = packet::PubRecPacket { packet_id };
+                send_packet(packet::Packet::PubRec(pubrec), writer).await?;
+                debug!(
+                    "Sent PUBREC for packet_id={} to session {}",
+                    packet_id, self.id
+                );
+
+                // Don't route yet - wait for PUBREL
+                return Ok(true);
+            } else {
+                // QoS=2 requires packet_id
+                error!("QoS=2 PUBLISH missing packet_id from session {}", self.id);
                 return Ok(false); // Disconnect on protocol violation
             }
         }
@@ -826,7 +1040,7 @@ impl Runtime {
         Ok(false)
     }
 
-    async fn on_retransmit<W: AsyncWrite + Unpin>(&mut self, _writer: &mut W) -> Result<()> {
+    async fn on_retransmit<W: AsyncWrite + Unpin>(&mut self, writer: &mut W) -> Result<()> {
         // Get config values
         let retransmission_interval_ms = self.broker.config().get_retransmission_interval_ms();
         if retransmission_interval_ms == 0 {
@@ -835,10 +1049,11 @@ impl Runtime {
 
         let max_retransmission_limit = self.broker.config().max_retransmission_limit;
         let now = Instant::now();
-        let mut to_retransmit = Vec::new();
+        let mut publish_to_retransmit = Vec::new();
+        let mut pubrel_to_retransmit = Vec::new();
 
         // Update retry counts and collect messages to retransmit
-        self.qos1_queue.retain_mut(|inflight| {
+        self.inflight_queue.retain_mut(|inflight| {
             let elapsed_ms = now.duration_since(inflight.timestamp).as_millis() as u64;
 
             if elapsed_ms >= retransmission_interval_ms {
@@ -852,11 +1067,29 @@ impl Runtime {
                     );
                     false // Remove from queue
                 } else {
-                    debug!(
-                        "Retransmitting message packet_id={:?}, retry_count={}/{}",
-                        inflight.packet.packet_id, inflight.retry_count, max_retransmission_limit
-                    );
-                    to_retransmit.push(inflight.packet.clone());
+                    // Determine what to retransmit based on QoS level and state
+                    match inflight.qos2_state {
+                        None | Some(Qos2State::AwaitingPubRec) => {
+                            // QoS=1 or QoS=2 waiting for PUBREC: retransmit PUBLISH
+                            debug!(
+                                "Retransmitting PUBLISH packet_id={:?}, retry_count={}/{}",
+                                inflight.packet.packet_id,
+                                inflight.retry_count,
+                                max_retransmission_limit
+                            );
+                            publish_to_retransmit.push(inflight.packet.clone());
+                        }
+                        Some(Qos2State::AwaitingPubComp) => {
+                            // QoS=2 waiting for PUBCOMP: retransmit PUBREL
+                            if let Some(packet_id) = inflight.packet.packet_id {
+                                debug!(
+                                    "Retransmitting PUBREL packet_id={}, retry_count={}/{}",
+                                    packet_id, inflight.retry_count, max_retransmission_limit
+                                );
+                                pubrel_to_retransmit.push(packet_id);
+                            }
+                        }
+                    }
                     true // Keep in queue
                 }
             } else {
@@ -864,11 +1097,17 @@ impl Runtime {
             }
         });
 
-        // Send all messages that need retransmission to mailbox
-        for packet in to_retransmit {
+        // Retransmit PUBLISH messages via mailbox (will be sent by on_message)
+        for packet in publish_to_retransmit {
             self.message_tx
                 .send(packet::Packet::Publish(packet))
                 .await?;
+        }
+
+        // Retransmit PUBREL messages directly
+        for packet_id in pubrel_to_retransmit {
+            let pubrel = packet::PubRelPacket { packet_id };
+            send_packet(packet::Packet::PubRel(pubrel), writer).await?;
         }
 
         Ok(())
@@ -929,17 +1168,38 @@ impl Runtime {
 
         // Convert in-flight messages
         let persisted_inflight: Vec<PersistedInflightMessage> = self
-            .qos1_queue
+            .inflight_queue
             .iter()
-            .map(|inflight| PersistedInflightMessage {
+            .map(|inflight| {
+                let qos2_state = inflight.qos2_state.map(|s| match s {
+                    Qos2State::AwaitingPubRec => PersistedQos2State::AwaitingPubRec,
+                    Qos2State::AwaitingPubComp => PersistedQos2State::AwaitingPubComp,
+                });
+                PersistedInflightMessage {
+                    client_id: client_id.clone(),
+                    packet_id: inflight.packet.packet_id.unwrap_or(0),
+                    topic: inflight.packet.topic.clone(),
+                    payload: inflight.packet.payload.clone(),
+                    qos: StoredQoS::from(inflight.packet.qos),
+                    retain: inflight.packet.retain,
+                    retry_count: inflight.retry_count,
+                    qos2_state,
+                    created_at: now,
+                }
+            })
+            .collect();
+
+        // Convert inbound QoS=2 messages
+        let persisted_inbound_qos2: Vec<PersistedInboundQos2Message> = self
+            .inbound_qos2
+            .iter()
+            .map(|(&packet_id, received)| PersistedInboundQos2Message {
                 client_id: client_id.clone(),
-                packet_id: inflight.packet.packet_id.unwrap_or(0),
-                topic: inflight.packet.topic.clone(),
-                payload: inflight.packet.payload.clone(),
-                qos: StoredQoS::from(inflight.packet.qos),
-                retain: inflight.packet.retain,
-                retry_count: inflight.retry_count,
-                created_at: now,
+                packet_id,
+                topic: received.packet.topic.clone(),
+                payload: received.packet.payload.clone(),
+                retain: received.packet.retain,
+                received_at: now,
             })
             .collect();
 
@@ -948,14 +1208,16 @@ impl Runtime {
             &persisted_session,
             &persisted_subs,
             &persisted_inflight,
+            &persisted_inbound_qos2,
         ) {
             warn!("Failed to save session {} to storage: {}", client_id, e);
         } else {
             info!(
-                "Saved session {} to storage ({} subscriptions, {} inflight messages)",
+                "Saved session {} to storage ({} subscriptions, {} inflight, {} inbound qos2)",
                 client_id,
                 persisted_subs.len(),
-                persisted_inflight.len()
+                persisted_inflight.len(),
+                persisted_inbound_qos2.len()
             );
         }
     }
@@ -996,6 +1258,19 @@ impl Runtime {
             }
         };
 
+        // Load inbound QoS=2 messages
+        let persisted_inbound_qos2 =
+            match self.broker.storage().load_inbound_qos2_messages(client_id) {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    warn!(
+                        "Failed to load inbound QoS=2 messages for {} from storage: {}",
+                        client_id, e
+                    );
+                    Vec::new()
+                }
+            };
+
         // Restore session state
         self.next_packet_id = persisted_session.next_packet_id;
         self.keep_alive = persisted_session.keep_alive;
@@ -1025,6 +1300,12 @@ impl Runtime {
 
         // Restore in-flight messages
         for msg in persisted_inflight {
+            // Convert persisted qos2_state to runtime state
+            let qos2_state = msg.qos2_state.map(|s| match s {
+                PersistedQos2State::AwaitingPubRec => Qos2State::AwaitingPubRec,
+                PersistedQos2State::AwaitingPubComp => Qos2State::AwaitingPubComp,
+            });
+
             let inflight = InflightMessage {
                 packet: packet::PublishPacket {
                     topic: msg.topic,
@@ -1036,14 +1317,40 @@ impl Runtime {
                 },
                 timestamp: Instant::now(),
                 retry_count: msg.retry_count,
+                qos2_state,
             };
-            self.qos1_queue.push_back(inflight);
+            self.inflight_queue.push_back(inflight);
         }
 
-        if !self.qos1_queue.is_empty() {
+        if !self.inflight_queue.is_empty() {
             info!(
                 "Restored {} inflight messages for session {}",
-                self.qos1_queue.len(),
+                self.inflight_queue.len(),
+                client_id
+            );
+        }
+
+        // Restore inbound QoS=2 messages
+        for msg in persisted_inbound_qos2 {
+            self.inbound_qos2.insert(
+                msg.packet_id,
+                ReceivedQos2Message {
+                    packet: packet::PublishPacket {
+                        topic: msg.topic,
+                        packet_id: Some(msg.packet_id),
+                        payload: msg.payload,
+                        qos: packet::QoS::ExactlyOnce,
+                        retain: msg.retain,
+                        dup: false,
+                    },
+                },
+            );
+        }
+
+        if !self.inbound_qos2.is_empty() {
+            info!(
+                "Restored {} inbound QoS=2 messages for session {}",
+                self.inbound_qos2.len(),
                 client_id
             );
         }

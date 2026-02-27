@@ -1,5 +1,6 @@
 use crate::storage::types::{
-    PersistedInflightMessage, PersistedRetainedMessage, PersistedSession, PersistedSubscription,
+    PersistedInboundQos2Message, PersistedInflightMessage, PersistedRetainedMessage,
+    PersistedSession, PersistedSubscription,
 };
 use chrono::{DateTime, Utc};
 use std::fmt::Debug;
@@ -25,13 +26,14 @@ pub enum StorageError {
 pub trait Storage: Send + Sync + Debug {
     // ========== Session Operations ==========
 
-    /// Save session state atomically (session + subscriptions + in-flight messages)
+    /// Save session state atomically (session + subscriptions + in-flight messages + inbound QoS=2)
     /// For clean_session=false clients on disconnect
     fn save_session(
         &self,
         session: &PersistedSession,
         subscriptions: &[PersistedSubscription],
         inflight: &[PersistedInflightMessage],
+        inbound_qos2: &[PersistedInboundQos2Message],
     ) -> StorageResult<()>;
 
     /// Load a session by client ID
@@ -45,6 +47,12 @@ pub trait Storage: Send + Sync + Debug {
         &self,
         client_id: &str,
     ) -> StorageResult<Vec<PersistedInflightMessage>>;
+
+    /// Load all inbound QoS=2 messages awaiting PUBREL
+    fn load_inbound_qos2_messages(
+        &self,
+        client_id: &str,
+    ) -> StorageResult<Vec<PersistedInboundQos2Message>>;
 
     /// Delete a session and all associated data (subscriptions, in-flight messages)
     fn delete_session(&self, client_id: &str) -> StorageResult<()>;

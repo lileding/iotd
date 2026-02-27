@@ -150,29 +150,34 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 
 ---
 
-### Milestone 5: QoS=2 Support 🎯 **PLANNED**
+### Milestone 5: QoS=2 Support ✅ **COMPLETED**
 **Target**: Exactly-once delivery guarantee
 
-**Features to Implement:**
-- 🎯 QoS=2 (Exactly once) message delivery
-- 🎯 PUBREC/PUBREL/PUBCOMP flow
-- 🎯 Two-phase commit protocol
-- 🎯 Message state persistence for QoS=2
-- 🎯 Duplicate detection across restarts
-- 🎯 Proper error handling and recovery
+**✅ Completed Features:**
+- ✅ QoS=2 (Exactly once) message delivery
+- ✅ PUBREC/PUBREL/PUBCOMP four-step handshake
+- ✅ QoS=2 state machine (AwaitingPubRec, AwaitingPubComp)
+- ✅ Inbound QoS=2 tracking for received messages
+- ✅ Outbound QoS=2 delivery to subscribers
+- ✅ QoS=2 retransmission (PUBLISH and PUBREL retry)
+- ✅ QoS=2 state persistence across restarts
+- ✅ QoS downgrade handling (min of publish/subscribe QoS)
+- ✅ Duplicate detection and proper handling
+- ✅ Comprehensive QoS=2 test suite
 
-**Technical Challenges:**
-- Complex state machine for QoS=2 flow
-- Ensuring exactly-once semantics
-- Performance impact of two-phase protocol
-- Recovery after crashes
+**Architecture Implemented:**
+- Extended InflightMessage with qos2_state field
+- Separate inbound_qos2 HashMap for received messages
+- State machine: AwaitingPubRec → AwaitingPubComp → Complete
+- Retransmission logic handles both PUBLISH and PUBREL
+- Persistence types: PersistedQos2State, PersistedInboundQos2Message
 
-**Timeline**: 6-8 weeks
-**Success Criteria**:
-- [ ] QoS=2 messages delivered exactly once
-- [ ] Proper handling of all edge cases
-- [ ] State survives server restarts
-- [ ] Acceptable performance
+**Timeline**: Completed
+**Success Criteria**: All achieved ✓
+- [✓] QoS=2 messages delivered exactly once
+- [✓] Proper handling of all edge cases
+- [✓] State survives server restarts
+- [✓] Acceptable performance
 
 ---
 
@@ -268,11 +273,13 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 - Topic-based ACLs ✓
 - Multiple simultaneous listeners ✓
 
-### v0.5.0 - QoS=2 (Milestone 5) 🎯
-- Exactly-once delivery
-- PUBREC/PUBREL/PUBCOMP flow
-- Two-phase commit protocol
-- State persistence for QoS=2
+### v0.5.0 - QoS=2 (Milestone 5) ✅ **COMPLETED**
+- Exactly-once delivery ✓
+- PUBREC/PUBREL/PUBCOMP flow ✓
+- QoS=2 state machine ✓
+- State persistence for QoS=2 ✓
+- Retransmission for PUBLISH and PUBREL ✓
+- Comprehensive test coverage ✓
 
 ### v0.6.0 - Observability (Milestone 6) 📊
 - Prometheus metrics
@@ -438,22 +445,24 @@ IoTD (IoT Daemon) development follows a progressive milestone approach, where ea
 
 ---
 
-## What's Next: Milestone 5 - QoS=2 🎯
+## What's Next: Milestone 6 - Observability 📊
 
-With security now complete, the next major milestone implements exactly-once delivery:
+With QoS=2 now complete, the next major milestone adds production monitoring capabilities:
 
 **Key Features to Implement:**
-1. **QoS=2 Delivery**: PUBREC/PUBREL/PUBCOMP four-packet flow
-2. **Two-phase commit**: Ensure exactly-once semantics
-3. **State Persistence**: QoS=2 state survives server restarts
-4. **Duplicate Detection**: Across reconnects and restarts
-5. **Proper Error Handling**: Recovery after partial flows
+1. **Prometheus Metrics**: Export broker metrics for monitoring
+2. **Grafana Dashboards**: Pre-built dashboard templates
+3. **Health Check Endpoints**: HTTP endpoints for load balancers
+4. **Structured Logging**: Enhanced logging with levels and context
+5. **Performance Metrics**: Connection, message, and latency tracking
 
-**Preparation Tasks:**
-- Extend session state machine for QoS=2 states
-- Add QoS=2 in-flight tracking to storage trait
-- Design packet ID reuse rules per MQTT 3.1.1 spec
-- Plan comprehensive QoS=2 test scenarios
+**Metrics to Export:**
+- Connection count and connection rate
+- Message throughput by QoS level
+- Topic statistics and subscription counts
+- Error rates and types
+- Resource usage (memory, CPU)
+- Latency percentiles
 
 ---
 

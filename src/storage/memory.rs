@@ -1,6 +1,7 @@
 use crate::storage::traits::{Storage, StorageResult};
 use crate::storage::types::{
-    PersistedInflightMessage, PersistedRetainedMessage, PersistedSession, PersistedSubscription,
+    PersistedInboundQos2Message, PersistedInflightMessage, PersistedRetainedMessage,
+    PersistedSession, PersistedSubscription,
 };
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -13,7 +14,8 @@ pub struct InMemoryStorage {
     sessions: RwLock<HashMap<String, PersistedSession>>,
     subscriptions: RwLock<HashMap<String, Vec<PersistedSubscription>>>, // client_id -> subs
     inflight: RwLock<HashMap<String, Vec<PersistedInflightMessage>>>,   // client_id -> messages
-    retained: RwLock<HashMap<String, PersistedRetainedMessage>>,        // topic -> message
+    inbound_qos2: RwLock<HashMap<String, Vec<PersistedInboundQos2Message>>>, // client_id -> messages
+    retained: RwLock<HashMap<String, PersistedRetainedMessage>>,             // topic -> message
 }
 
 impl InMemoryStorage {
@@ -22,6 +24,7 @@ impl InMemoryStorage {
             sessions: RwLock::new(HashMap::new()),
             subscriptions: RwLock::new(HashMap::new()),
             inflight: RwLock::new(HashMap::new()),
+            inbound_qos2: RwLock::new(HashMap::new()),
             retained: RwLock::new(HashMap::new()),
         }
     }
@@ -41,11 +44,13 @@ impl Storage for InMemoryStorage {
         session: &PersistedSession,
         subscriptions: &[PersistedSubscription],
         inflight: &[PersistedInflightMessage],
+        inbound_qos2: &[PersistedInboundQos2Message],
     ) -> StorageResult<()> {
         // Acquire all locks to ensure atomicity
         let mut sessions_guard = self.sessions.write().unwrap();
         let mut subs_guard = self.subscriptions.write().unwrap();
         let mut inflight_guard = self.inflight.write().unwrap();
+        let mut inbound_qos2_guard = self.inbound_qos2.write().unwrap();
 
         let client_id = &session.client_id;
 
@@ -57,6 +62,9 @@ impl Storage for InMemoryStorage {
 
         // Replace in-flight messages
         inflight_guard.insert(client_id.clone(), inflight.to_vec());
+
+        // Replace inbound QoS=2 messages
+        inbound_qos2_guard.insert(client_id.clone(), inbound_qos2.to_vec());
 
         Ok(())
     }
@@ -79,14 +87,24 @@ impl Storage for InMemoryStorage {
         Ok(inflight.get(client_id).cloned().unwrap_or_default())
     }
 
+    fn load_inbound_qos2_messages(
+        &self,
+        client_id: &str,
+    ) -> StorageResult<Vec<PersistedInboundQos2Message>> {
+        let inbound_qos2 = self.inbound_qos2.read().unwrap();
+        Ok(inbound_qos2.get(client_id).cloned().unwrap_or_default())
+    }
+
     fn delete_session(&self, client_id: &str) -> StorageResult<()> {
         let mut sessions = self.sessions.write().unwrap();
         let mut subscriptions = self.subscriptions.write().unwrap();
         let mut inflight = self.inflight.write().unwrap();
+        let mut inbound_qos2 = self.inbound_qos2.write().unwrap();
 
         sessions.remove(client_id);
         subscriptions.remove(client_id);
         inflight.remove(client_id);
+        inbound_qos2.remove(client_id);
 
         Ok(())
     }
@@ -100,6 +118,7 @@ impl Storage for InMemoryStorage {
         let mut sessions = self.sessions.write().unwrap();
         let mut subscriptions = self.subscriptions.write().unwrap();
         let mut inflight = self.inflight.write().unwrap();
+        let mut inbound_qos2 = self.inbound_qos2.write().unwrap();
 
         let expired: Vec<String> = sessions
             .iter()
@@ -113,6 +132,7 @@ impl Storage for InMemoryStorage {
             sessions.remove(&client_id);
             subscriptions.remove(&client_id);
             inflight.remove(&client_id);
+            inbound_qos2.remove(&client_id);
         }
 
         Ok(count)
@@ -185,10 +205,13 @@ mod tests {
             qos: StoredQoS::AtLeastOnce,
             retain: false,
             retry_count: 0,
+            qos2_state: None,
             created_at: now,
         }];
 
-        storage.save_session(&session, &subs, &inflight).unwrap();
+        storage
+            .save_session(&session, &subs, &inflight, &[])
+            .unwrap();
 
         // Load and verify
         let loaded_session = storage.load_session("test-client").unwrap().unwrap();
@@ -235,10 +258,13 @@ mod tests {
             qos: StoredQoS::AtLeastOnce,
             retain: false,
             retry_count: 0,
+            qos2_state: None,
             created_at: now,
         }];
 
-        storage.save_session(&session, &subs, &inflight).unwrap();
+        storage
+            .save_session(&session, &subs, &inflight, &[])
+            .unwrap();
 
         // Delete session should cascade
         storage.delete_session("client1").unwrap();

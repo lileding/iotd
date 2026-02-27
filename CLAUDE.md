@@ -87,7 +87,7 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The ar
 5. **Event-driven**: tokio::select! for responsive packet and shutdown handling
 6. **Session Management**: SessionId starts as `__anon_$uuid`, becomes `__client_$clientId` after CONNECT
 
-### Current Status (Milestone 3 - Completed)
+### Current Status (Milestone 5 - Completed)
 
 **✅ Milestone 1 Completed:**
 - Event-driven architecture with tokio::select!
@@ -121,6 +121,22 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The ar
 - Atomic session state save (all-or-nothing)
 - Config-based storage backend selection
 
+**✅ Milestone 4 Completed:**
+- TLS/SSL encryption via `tls://` listener prefix
+- Multiple simultaneous listeners (TCP + TLS)
+- Username/password authentication (file-based)
+- Topic-based ACLs for publish/subscribe access control
+- Pluggable auth and ACL backends (`allowall`, `file`)
+
+**✅ Milestone 5 Completed:**
+- QoS=2 "exactly once" delivery guarantee
+- PUBREC/PUBREL/PUBCOMP four-step handshake
+- QoS=2 state machine (AwaitingPubRec, AwaitingPubComp)
+- Inbound and outbound QoS=2 message handling
+- QoS=2 retransmission (PUBLISH and PUBREL retry)
+- QoS=2 state persistence across restarts
+- Comprehensive QoS=2 test coverage
+
 ### Project Structure
 - `src/auth/` - Authentication and authorization (Milestone 4+)
 - `src/protocol/` - MQTT protocol implementation (v3.1.1 in progress)
@@ -134,8 +150,8 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The ar
 **Milestone 1** ✅: Full MQTTv3 Server (QoS=0, no persistency/auth)
 **Milestone 2** ✅: QoS=1 Support
 **Milestone 3** ✅: Persistence Layer
-**Milestone 4**: Security (TLS, Auth, ACLs)
-**Milestone 5**: QoS=2 Support
+**Milestone 4** ✅: Security (TLS, Auth, ACLs)
+**Milestone 5** ✅: QoS=2 Support
 **Milestone 6**: Observability (Prometheus, Grafana)
 **Milestone 7**: Flow Control & Production Features
 **v1.0**: Production Ready

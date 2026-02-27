@@ -1,7 +1,8 @@
 use crate::storage::traits::{Storage, StorageError, StorageResult};
 use crate::storage::types::{
-    PersistedInflightMessage, PersistedRetainedMessage, PersistedSession, PersistedSubscription,
-    PersistedWillMessage, StoredQoS,
+    PersistedInboundQos2Message, PersistedInflightMessage, PersistedQos2State,
+    PersistedRetainedMessage, PersistedSession, PersistedSubscription, PersistedWillMessage,
+    StoredQoS,
 };
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -85,7 +86,7 @@ impl SqliteStorage {
                 PRIMARY KEY (client_id, topic_filter)
             );
 
-            -- In-flight messages (QoS=1 awaiting PUBACK)
+            -- In-flight messages (QoS=1/2 awaiting acknowledgement)
             CREATE TABLE IF NOT EXISTS inflight_messages (
                 client_id TEXT NOT NULL,
                 packet_id INTEGER NOT NULL,
@@ -94,7 +95,19 @@ impl SqliteStorage {
                 qos INTEGER NOT NULL,
                 retain INTEGER NOT NULL,
                 retry_count INTEGER NOT NULL,
+                qos2_state INTEGER,
                 created_at TEXT NOT NULL,
+                PRIMARY KEY (client_id, packet_id)
+            );
+
+            -- Inbound QoS=2 messages awaiting PUBREL
+            CREATE TABLE IF NOT EXISTS inbound_qos2_messages (
+                client_id TEXT NOT NULL,
+                packet_id INTEGER NOT NULL,
+                topic TEXT NOT NULL,
+                payload BLOB NOT NULL,
+                retain INTEGER NOT NULL,
+                received_at TEXT NOT NULL,
                 PRIMARY KEY (client_id, packet_id)
             );
 
@@ -111,6 +124,8 @@ impl SqliteStorage {
                 ON subscriptions(client_id);
             CREATE INDEX IF NOT EXISTS idx_inflight_client
                 ON inflight_messages(client_id);
+            CREATE INDEX IF NOT EXISTS idx_inbound_qos2_client
+                ON inbound_qos2_messages(client_id);
             "#,
         )?;
 
@@ -121,6 +136,10 @@ impl SqliteStorage {
     fn delete_client_data(tx: &Transaction, client_id: &str) -> StorageResult<()> {
         tx.execute(
             "DELETE FROM inflight_messages WHERE client_id = ?1",
+            params![client_id],
+        )?;
+        tx.execute(
+            "DELETE FROM inbound_qos2_messages WHERE client_id = ?1",
             params![client_id],
         )?;
         tx.execute(
@@ -143,6 +162,7 @@ impl Storage for SqliteStorage {
         session: &PersistedSession,
         subscriptions: &[PersistedSubscription],
         inflight: &[PersistedInflightMessage],
+        inbound_qos2: &[PersistedInboundQos2Message],
     ) -> StorageResult<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
@@ -202,8 +222,8 @@ impl Storage for SqliteStorage {
             let mut stmt = tx.prepare(
                 r#"
                 INSERT INTO inflight_messages (
-                    client_id, packet_id, topic, payload, qos, retain, retry_count, created_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    client_id, packet_id, topic, payload, qos, retain, retry_count, qos2_state, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                 "#,
             )?;
             for msg in inflight {
@@ -215,7 +235,33 @@ impl Storage for SqliteStorage {
                     msg.qos.as_u8(),
                     msg.retain as i32,
                     msg.retry_count,
+                    msg.qos2_state.map(|s| s.as_u8()),
                     msg.created_at.to_rfc3339(),
+                ])?;
+            }
+        }
+
+        // Replace inbound QoS=2 messages: delete all, then insert
+        tx.execute(
+            "DELETE FROM inbound_qos2_messages WHERE client_id = ?1",
+            params![client_id],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                r#"
+                INSERT INTO inbound_qos2_messages (
+                    client_id, packet_id, topic, payload, retain, received_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "#,
+            )?;
+            for msg in inbound_qos2 {
+                stmt.execute(params![
+                    msg.client_id,
+                    msg.packet_id,
+                    msg.topic,
+                    msg.payload.to_vec(),
+                    msg.retain as i32,
+                    msg.received_at.to_rfc3339(),
                 ])?;
             }
         }
@@ -350,7 +396,7 @@ impl Storage for SqliteStorage {
 
         let mut stmt = conn.prepare(
             r#"
-            SELECT client_id, packet_id, topic, payload, qos, retain, retry_count, created_at
+            SELECT client_id, packet_id, topic, payload, qos, retain, retry_count, qos2_state, created_at
             FROM inflight_messages WHERE client_id = ?1
             ORDER BY created_at ASC
             "#,
@@ -365,7 +411,8 @@ impl Storage for SqliteStorage {
             let payload: Vec<u8> = row.get(3)?;
             let qos_val: u8 = row.get(4)?;
             let retain_val: i32 = row.get(5)?;
-            let created_at_str: String = row.get(7)?;
+            let qos2_state_val: Option<u8> = row.get(7)?;
+            let created_at_str: String = row.get(8)?;
 
             // Use client_id:packet_id as record identifier for error context
             let record_id = format!("{}:{}", client_id, packet_id);
@@ -378,10 +425,55 @@ impl Storage for SqliteStorage {
                 qos: StoredQoS::from_u8(qos_val).unwrap_or(StoredQoS::AtLeastOnce),
                 retain: retain_val != 0,
                 retry_count: row.get::<_, i32>(6)? as u32,
+                qos2_state: qos2_state_val.and_then(PersistedQos2State::from_u8),
                 created_at: parse_datetime(
                     &created_at_str,
                     "inflight_messages",
                     "created_at",
+                    &record_id,
+                )?,
+            });
+        }
+
+        Ok(messages)
+    }
+
+    fn load_inbound_qos2_messages(
+        &self,
+        client_id: &str,
+    ) -> StorageResult<Vec<PersistedInboundQos2Message>> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT client_id, packet_id, topic, payload, retain, received_at
+            FROM inbound_qos2_messages WHERE client_id = ?1
+            ORDER BY received_at ASC
+            "#,
+        )?;
+
+        let mut messages = Vec::new();
+        let mut rows = stmt.query(params![client_id])?;
+
+        while let Some(row) = rows.next()? {
+            let client_id: String = row.get(0)?;
+            let packet_id: i32 = row.get(1)?;
+            let payload: Vec<u8> = row.get(3)?;
+            let retain_val: i32 = row.get(4)?;
+            let received_at_str: String = row.get(5)?;
+
+            let record_id = format!("{}:{}", client_id, packet_id);
+
+            messages.push(PersistedInboundQos2Message {
+                client_id,
+                packet_id: packet_id as u16,
+                topic: row.get(2)?,
+                payload: Bytes::from(payload),
+                retain: retain_val != 0,
+                received_at: parse_datetime(
+                    &received_at_str,
+                    "inbound_qos2_messages",
+                    "received_at",
                     &record_id,
                 )?,
             });
@@ -539,10 +631,13 @@ mod tests {
             qos: StoredQoS::AtLeastOnce,
             retain: false,
             retry_count: 0,
+            qos2_state: None,
             created_at: now,
         }];
 
-        storage.save_session(&session, &subs, &inflight).unwrap();
+        storage
+            .save_session(&session, &subs, &inflight, &[])
+            .unwrap();
 
         // Load and verify session
         let loaded_session = storage.load_session("test-client").unwrap().unwrap();
@@ -638,10 +733,13 @@ mod tests {
             qos: StoredQoS::AtLeastOnce,
             retain: false,
             retry_count: 0,
+            qos2_state: None,
             created_at: now,
         }];
 
-        storage.save_session(&session, &subs, &inflight).unwrap();
+        storage
+            .save_session(&session, &subs, &inflight, &[])
+            .unwrap();
 
         // Delete session should cascade to subscriptions and in-flight messages
         storage.delete_session("client1").unwrap();
@@ -671,7 +769,7 @@ mod tests {
             created_at: old_time,
             updated_at: old_time,
         };
-        storage.save_session(&old_session, &[], &[]).unwrap();
+        storage.save_session(&old_session, &[], &[], &[]).unwrap();
 
         // Create a recent session
         let recent_session = PersistedSession {
@@ -682,7 +780,9 @@ mod tests {
             created_at: recent_time,
             updated_at: recent_time,
         };
-        storage.save_session(&recent_session, &[], &[]).unwrap();
+        storage
+            .save_session(&recent_session, &[], &[], &[])
+            .unwrap();
 
         // Delete sessions older than 1 hour ago
         let cutoff = Utc::now() - Duration::hours(1);

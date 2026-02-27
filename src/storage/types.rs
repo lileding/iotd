@@ -73,7 +73,28 @@ pub struct PersistedSubscription {
     pub qos: StoredQoS,
 }
 
-/// In-flight QoS=1 message awaiting PUBACK
+/// QoS=2 state for persistence
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PersistedQos2State {
+    AwaitingPubRec = 0,
+    AwaitingPubComp = 1,
+}
+
+impl PersistedQos2State {
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(PersistedQos2State::AwaitingPubRec),
+            1 => Some(PersistedQos2State::AwaitingPubComp),
+            _ => None,
+        }
+    }
+
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+/// In-flight QoS=1/2 message awaiting acknowledgement
 #[derive(Debug, Clone)]
 pub struct PersistedInflightMessage {
     pub client_id: String,
@@ -83,7 +104,19 @@ pub struct PersistedInflightMessage {
     pub qos: StoredQoS,
     pub retain: bool,
     pub retry_count: u32,
+    pub qos2_state: Option<PersistedQos2State>, // None for QoS=1, Some for QoS=2
     pub created_at: DateTime<Utc>,
+}
+
+/// Inbound QoS=2 message awaiting PUBREL
+#[derive(Debug, Clone)]
+pub struct PersistedInboundQos2Message {
+    pub client_id: String,
+    pub packet_id: u16,
+    pub topic: String,
+    pub payload: Bytes,
+    pub retain: bool,
+    pub received_at: DateTime<Utc>,
 }
 
 /// Retained message stored on a topic

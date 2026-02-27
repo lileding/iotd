@@ -15,7 +15,7 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 ## Features
 
 - **MQTT v3.1.1 protocol support** with all packet types
-- **QoS=0 and QoS=1** message delivery with retransmission and DUP detection
+- **QoS=0, QoS=1, and QoS=2** message delivery with full protocol support
 - **Message routing** with full MQTT wildcard support (`+` single-level, `#` multi-level)
 - **Clean session** with session takeover and proper cleanup
 - **Keep-alive mechanism** with configurable timeouts
@@ -30,13 +30,13 @@ A high-performance MQTT server daemon implementation in Rust using Tokio, design
 - **Race-condition-free shutdown** using CancellationToken
 - **UNIX signal handling** (SIGINT graceful, SIGTERM immediate)
 - **Comprehensive configuration** with TOML support
-- **Extensive test coverage** with 100+ tests validating all functionality
+- **Extensive test coverage** with 136+ tests validating all functionality
 
 ## Current Status
 
-**IoTD has completed Milestone 4 - Security! 🎉**
+**IoTD has completed Milestone 5 - QoS=2! 🎉**
 
-The project now has full security support including TLS encryption, username/password authentication, and topic-based access control lists.
+The project now supports all three MQTT QoS levels, providing "exactly once" delivery guarantee with the complete PUBREC/PUBREL/PUBCOMP four-step handshake protocol.
 
 ### Completed Features ✅
 
@@ -84,6 +84,16 @@ The project now has full security support including TLS encryption, username/pas
 - ✅ **Config-based TLS** - Certificate and key file paths in TOML
 - ✅ **TLS integration tests** - Self-signed cert testing with rcgen
 
+#### Milestone 5 - QoS=2 ✅ **COMPLETED**
+- ✅ **QoS=2 message delivery** - "Exactly once" guarantee fully implemented
+- ✅ **PUBREC/PUBREL/PUBCOMP flow** - Complete four-step handshake protocol
+- ✅ **QoS=2 state machine** - AwaitingPubRec and AwaitingPubComp states
+- ✅ **Inbound QoS=2 tracking** - Broker receives and processes QoS=2 messages
+- ✅ **Outbound QoS=2 delivery** - Broker sends QoS=2 to subscribers
+- ✅ **QoS=2 retransmission** - PUBLISH and PUBREL retry on timeout
+- ✅ **QoS=2 persistence** - State survives server restarts
+- ✅ **Comprehensive QoS=2 tests** - 5+ integration tests covering all scenarios
+
 ### Roadmap 📋
 
 #### Near-term (v0.x - v1.0)
@@ -91,8 +101,8 @@ The project now has full security support including TLS encryption, username/pas
 - **Milestone 2**: ✅ QoS=1 Support (Completed)
 - **Milestone 3**: ✅ Persistence Layer (Completed)
 - **Milestone 4**: ✅ Security - TLS, Authentication, ACLs (Completed)
-- **Milestone 5** (Next): QoS=2 "exactly once" delivery
-- **Milestone 6**: Observability (Prometheus, Grafana)
+- **Milestone 5**: ✅ QoS=2 "exactly once" delivery (Completed)
+- **Milestone 6** (Next): Observability (Prometheus, Grafana)
 - **Milestone 7**: Flow control & production features
 - **v1.0**: Production-ready single-node broker
 
