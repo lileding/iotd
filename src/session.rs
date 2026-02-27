@@ -63,7 +63,6 @@ struct InflightMessage {
 #[derive(Debug, Clone)]
 struct ReceivedQos2Message {
     packet: packet::PublishPacket,
-    received_at: Instant,
 }
 
 pub type Mailbox = mpsc::Sender<packet::Packet>;
@@ -725,14 +724,14 @@ impl Runtime {
         // Find the message in inflight queue and update state to AwaitingPubComp
         let mut found = false;
         for inflight in self.inflight_queue.iter_mut() {
-            if inflight.packet.packet_id == Some(packet.packet_id) {
-                if inflight.qos2_state == Some(Qos2State::AwaitingPubRec) {
-                    inflight.qos2_state = Some(Qos2State::AwaitingPubComp);
-                    inflight.timestamp = Instant::now(); // Reset for PUBREL retransmission
-                    inflight.retry_count = 0;
-                    found = true;
-                    break;
-                }
+            if inflight.packet.packet_id == Some(packet.packet_id)
+                && inflight.qos2_state == Some(Qos2State::AwaitingPubRec)
+            {
+                inflight.qos2_state = Some(Qos2State::AwaitingPubComp);
+                inflight.timestamp = Instant::now(); // Reset for PUBREL retransmission
+                inflight.retry_count = 0;
+                found = true;
+                break;
             }
         }
 
@@ -892,7 +891,6 @@ impl Runtime {
                     packet_id,
                     ReceivedQos2Message {
                         packet: packet.clone(),
-                        received_at: Instant::now(),
                     },
                 );
 
@@ -1344,7 +1342,6 @@ impl Runtime {
                         retain: msg.retain,
                         dup: false,
                     },
-                    received_at: Instant::now(),
                 },
             );
         }
