@@ -96,7 +96,8 @@
             <h3>Supported Packet Types</h3>
             <ul>
                 <li><strong>Control</strong>: CONNECT, CONNACK, DISCONNECT, PINGREQ, PINGRESP</li>
-                <li><strong>Publish</strong>: PUBLISH, PUBACK (QoS=1)</li>
+                <li><strong>Publish QoS=1</strong>: PUBLISH, PUBACK</li>
+                <li><strong>Publish QoS=2</strong>: PUBLISH, PUBREC, PUBREL, PUBCOMP</li>
                 <li><strong>Subscribe</strong>: SUBSCRIBE, SUBACK, UNSUBSCRIBE, UNSUBACK</li>
             </ul>
 
@@ -105,6 +106,24 @@
                 <pre>Publisher → PUBLISH → IoTD → PUBLISH → Subscriber
     ↑                    ↓         ↓           ↓
     └──── PUBACK ────────┘         └── PUBACK ─┘</pre>
+            </div>
+
+            <h3>QoS=2 Message Flow (Exactly Once)</h3>
+            <div class="code-block">
+                <pre>Publisher                    IoTD                    Subscriber
+    │                          │                          │
+    ├── PUBLISH (QoS=2) ──────►│                          │
+    │                          │──── store message ────► │
+    │◄────── PUBREC ───────────│                          │
+    │                          │                          │
+    ├────── PUBREL ───────────►│──── PUBLISH (QoS=2) ───►│
+    │                          │                          │
+    │                          │◄────── PUBREC ───────────│
+    │◄────── PUBCOMP ──────────│                          │
+    │                          │────── PUBREL ───────────►│
+    │                          │                          │
+    │                          │◄────── PUBCOMP ──────────│
+    │                          │                          │</pre>
             </div>
 
             <h3>Topic Validation Rules</h3>
@@ -129,11 +148,12 @@ listen = "127.0.0.1:1883"
 # Default: 10000
 retained_message_limit = 10000
 
-# Maximum retransmission attempts for QoS=1
+# Maximum retransmission attempts for QoS=1 and QoS=2
 # Default: 10
 max_retransmission_limit = 10
 
 # Interval between retransmission attempts (milliseconds)
+# Applies to PUBLISH (QoS=1, QoS=2) and PUBREL (QoS=2)
 # Default: 5000 (5 seconds)
 retransmission_interval_ms = 5000
 
