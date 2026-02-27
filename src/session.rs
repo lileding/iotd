@@ -1042,7 +1042,7 @@ impl Runtime {
         Ok(false)
     }
 
-    async fn on_retransmit<W: AsyncWrite + Unpin>(&mut self, _writer: &mut W) -> Result<()> {
+    async fn on_retransmit<W: AsyncWrite + Unpin>(&mut self, writer: &mut W) -> Result<()> {
         // Get config values
         let retransmission_interval_ms = self.broker.config().get_retransmission_interval_ms();
         if retransmission_interval_ms == 0 {
@@ -1051,7 +1051,8 @@ impl Runtime {
 
         let max_retransmission_limit = self.broker.config().max_retransmission_limit;
         let now = Instant::now();
-        let mut to_retransmit = Vec::new();
+        let mut publish_to_retransmit = Vec::new();
+        let mut pubrel_to_retransmit = Vec::new();
 
         // Update retry counts and collect messages to retransmit
         self.inflight_queue.retain_mut(|inflight| {
@@ -1068,11 +1069,29 @@ impl Runtime {
                     );
                     false // Remove from queue
                 } else {
-                    debug!(
-                        "Retransmitting message packet_id={:?}, retry_count={}/{}",
-                        inflight.packet.packet_id, inflight.retry_count, max_retransmission_limit
-                    );
-                    to_retransmit.push(inflight.packet.clone());
+                    // Determine what to retransmit based on QoS level and state
+                    match inflight.qos2_state {
+                        None | Some(Qos2State::AwaitingPubRec) => {
+                            // QoS=1 or QoS=2 waiting for PUBREC: retransmit PUBLISH
+                            debug!(
+                                "Retransmitting PUBLISH packet_id={:?}, retry_count={}/{}",
+                                inflight.packet.packet_id,
+                                inflight.retry_count,
+                                max_retransmission_limit
+                            );
+                            publish_to_retransmit.push(inflight.packet.clone());
+                        }
+                        Some(Qos2State::AwaitingPubComp) => {
+                            // QoS=2 waiting for PUBCOMP: retransmit PUBREL
+                            if let Some(packet_id) = inflight.packet.packet_id {
+                                debug!(
+                                    "Retransmitting PUBREL packet_id={}, retry_count={}/{}",
+                                    packet_id, inflight.retry_count, max_retransmission_limit
+                                );
+                                pubrel_to_retransmit.push(packet_id);
+                            }
+                        }
+                    }
                     true // Keep in queue
                 }
             } else {
@@ -1080,11 +1099,17 @@ impl Runtime {
             }
         });
 
-        // Send all messages that need retransmission to mailbox
-        for packet in to_retransmit {
+        // Retransmit PUBLISH messages via mailbox (will be sent by on_message)
+        for packet in publish_to_retransmit {
             self.message_tx
                 .send(packet::Packet::Publish(packet))
                 .await?;
+        }
+
+        // Retransmit PUBREL messages directly
+        for packet_id in pubrel_to_retransmit {
+            let pubrel = packet::PubRelPacket { packet_id };
+            send_packet(packet::Packet::PubRel(pubrel), writer).await?;
         }
 
         Ok(())
