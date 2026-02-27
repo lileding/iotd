@@ -613,6 +613,9 @@ impl Runtime {
         match pack {
             packet::Packet::Publish(p) => self.on_publish(p, writer).await,
             packet::Packet::PubAck(p) => self.on_puback(p, writer).await,
+            packet::Packet::PubRec(p) => self.on_pubrec(p, writer).await,
+            packet::Packet::PubRel(p) => self.on_pubrel(p, writer).await,
+            packet::Packet::PubComp(p) => self.on_pubcomp(p, writer).await,
             packet::Packet::Subscribe(p) => self.on_subscribe(p, writer).await,
             packet::Packet::Unsubscribe(p) => self.on_unsubscribe(p, writer).await,
             packet::Packet::PingReq => self.on_pingreq(writer).await,
@@ -657,6 +660,30 @@ impl Runtime {
                     // QoS=1 with DUP: Just send it
                     send_packet(packet::Packet::Publish(pub_packet), writer).await?;
                 }
+            } else if pub_packet.qos == packet::QoS::ExactlyOnce {
+                if !pub_packet.dup {
+                    // QoS=2 without DUP: Assign packet ID and track it
+                    let packet_id = self.next_packet_id();
+                    pub_packet.packet_id = Some(packet_id);
+
+                    debug!("Sending new QoS=2 message with packet_id={packet_id}");
+
+                    // Send it immediately
+                    send_packet(packet::Packet::Publish(pub_packet.clone()), writer).await?;
+
+                    // Add to in-flight queue with DUP flag and QoS=2 state
+                    pub_packet.dup = true;
+                    let inflight = InflightMessage {
+                        packet: pub_packet,
+                        timestamp: Instant::now(),
+                        retry_count: 0,
+                        qos2_state: Some(Qos2State::AwaitingPubRec),
+                    };
+                    self.inflight_queue.push_back(inflight);
+                } else {
+                    // QoS=2 with DUP: Just send it (retransmission)
+                    send_packet(packet::Packet::Publish(pub_packet), writer).await?;
+                }
             }
         }
         Ok(())
@@ -678,6 +705,131 @@ impl Runtime {
 
         debug!(
             "Removed acknowledged message, {} messages still in-flight",
+            self.inflight_queue.len()
+        );
+
+        Ok(true)
+    }
+
+    /// Handle PUBREC from client (we are sender, client acknowledged receipt)
+    async fn on_pubrec<W: AsyncWrite + Unpin>(
+        &mut self,
+        packet: packet::PubRecPacket,
+        writer: &mut W,
+    ) -> Result<bool> {
+        info!(
+            "PUBREC received for session {}: packet_id={}",
+            self.id, packet.packet_id
+        );
+
+        // Find the message in inflight queue and update state to AwaitingPubComp
+        let mut found = false;
+        for inflight in self.inflight_queue.iter_mut() {
+            if inflight.packet.packet_id == Some(packet.packet_id) {
+                if inflight.qos2_state == Some(Qos2State::AwaitingPubRec) {
+                    inflight.qos2_state = Some(Qos2State::AwaitingPubComp);
+                    inflight.timestamp = Instant::now(); // Reset for PUBREL retransmission
+                    inflight.retry_count = 0;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if !found {
+            // Could be a duplicate PUBREC for a message we already processed
+            debug!(
+                "PUBREC for unknown or already-processed packet_id={}",
+                packet.packet_id
+            );
+        }
+
+        // Send PUBREL regardless (idempotent response)
+        let pubrel = packet::PubRelPacket {
+            packet_id: packet.packet_id,
+        };
+        send_packet(packet::Packet::PubRel(pubrel), writer).await?;
+        debug!(
+            "Sent PUBREL for packet_id={} to session {}",
+            packet.packet_id, self.id
+        );
+
+        Ok(true)
+    }
+
+    /// Handle PUBREL from client (client is releasing message, we should route it)
+    async fn on_pubrel<W: AsyncWrite + Unpin>(
+        &mut self,
+        packet: packet::PubRelPacket,
+        writer: &mut W,
+    ) -> Result<bool> {
+        info!(
+            "PUBREL received for session {}: packet_id={}",
+            self.id, packet.packet_id
+        );
+
+        // Send PUBCOMP first (even if we don't have the message, for idempotency)
+        let pubcomp = packet::PubCompPacket {
+            packet_id: packet.packet_id,
+        };
+        send_packet(packet::Packet::PubComp(pubcomp), writer).await?;
+        debug!(
+            "Sent PUBCOMP for packet_id={} to session {}",
+            packet.packet_id, self.id
+        );
+
+        // Remove message from inbound_qos2 and route it
+        if let Some(received) = self.inbound_qos2.remove(&packet.packet_id) {
+            // Check publish authorization before routing
+            let client_id = self.client_id.as_deref().unwrap_or("");
+            if self
+                .broker
+                .authorizer()
+                .authorize_publish(client_id, &received.packet.topic)
+                .await
+                .is_err()
+            {
+                info!(
+                    "QoS=2 PUBLISH denied by ACL for client_id={}, topic={}",
+                    client_id, received.packet.topic
+                );
+                return Ok(true); // Silently drop, don't route
+            }
+
+            // Route the message
+            self.broker.route(received.packet).await;
+            debug!(
+                "Routed QoS=2 message for packet_id={} from session {}",
+                packet.packet_id, self.id
+            );
+        } else {
+            // Already processed or unknown - normal for retransmissions
+            debug!(
+                "PUBREL for unknown packet_id={}, already processed",
+                packet.packet_id
+            );
+        }
+
+        Ok(true)
+    }
+
+    /// Handle PUBCOMP from client (QoS=2 complete, we can remove from inflight)
+    async fn on_pubcomp<W: AsyncWrite + Unpin>(
+        &mut self,
+        packet: packet::PubCompPacket,
+        _writer: &mut W,
+    ) -> Result<bool> {
+        info!(
+            "PUBCOMP received for session {}: packet_id={}",
+            self.id, packet.packet_id
+        );
+
+        // Remove the message from inflight queue
+        self.inflight_queue
+            .retain(|inflight| inflight.packet.packet_id != Some(packet.packet_id));
+
+        debug!(
+            "QoS=2 exchange complete, {} messages still in-flight",
             self.inflight_queue.len()
         );
 
@@ -716,6 +868,47 @@ impl Runtime {
             } else {
                 // QoS=1 requires packet_id
                 error!("QoS=1 PUBLISH missing packet_id from session {}", self.id);
+                return Ok(false); // Disconnect on protocol violation
+            }
+        }
+
+        // Handle QoS=2: Store message and send PUBREC, wait for PUBREL to route
+        if packet.qos == packet::QoS::ExactlyOnce {
+            if let Some(packet_id) = packet.packet_id {
+                // Check if this is a duplicate (we already have this packet_id)
+                if self.inbound_qos2.contains_key(&packet_id) {
+                    // Duplicate: resend PUBREC
+                    let pubrec = packet::PubRecPacket { packet_id };
+                    send_packet(packet::Packet::PubRec(pubrec), writer).await?;
+                    debug!(
+                        "Resent PUBREC for duplicate QoS=2 packet_id={} to session {}",
+                        packet_id, self.id
+                    );
+                    return Ok(true);
+                }
+
+                // Store message for later routing when PUBREL arrives
+                self.inbound_qos2.insert(
+                    packet_id,
+                    ReceivedQos2Message {
+                        packet: packet.clone(),
+                        received_at: Instant::now(),
+                    },
+                );
+
+                // Send PUBREC
+                let pubrec = packet::PubRecPacket { packet_id };
+                send_packet(packet::Packet::PubRec(pubrec), writer).await?;
+                debug!(
+                    "Sent PUBREC for packet_id={} to session {}",
+                    packet_id, self.id
+                );
+
+                // Don't route yet - wait for PUBREL
+                return Ok(true);
+            } else {
+                // QoS=2 requires packet_id
+                error!("QoS=2 PUBLISH missing packet_id from session {}", self.id);
                 return Ok(false); // Disconnect on protocol violation
             }
         }
