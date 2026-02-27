@@ -5,7 +5,12 @@ use crate::storage::{
 use crate::{broker::Broker, protocol::packet, protocol::v3, transport::AsyncStream};
 use bytes::{Bytes, BytesMut};
 use chrono::Utc;
-use std::{collections::VecDeque, future::Future, pin::Pin, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
 use thiserror::Error;
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt},
@@ -35,7 +40,15 @@ struct Runtime {
     keep_alive: u16,
     will_message: Option<WillMessage>,
     next_packet_id: u16, // For generating packet IDs for outgoing QoS > 0 messages
-    qos1_queue: VecDeque<InflightMessage>, // In-flight QoS=1 messages
+    inflight_queue: VecDeque<InflightMessage>, // In-flight QoS=1 and QoS=2 messages
+    inbound_qos2: HashMap<u16, ReceivedQos2Message>, // Inbound QoS=2 messages awaiting PUBREL
+}
+
+/// QoS=2 message state for outbound messages
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Qos2State {
+    AwaitingPubRec, // PUBLISH sent, waiting for PUBREC
+    AwaitingPubComp, // PUBREL sent, waiting for PUBCOMP
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +56,14 @@ struct InflightMessage {
     packet: packet::PublishPacket,
     timestamp: Instant,
     retry_count: u32,
+    qos2_state: Option<Qos2State>, // None for QoS=1, Some for QoS=2
+}
+
+/// Inbound QoS=2 message waiting for PUBREL
+#[derive(Debug, Clone)]
+struct ReceivedQos2Message {
+    packet: packet::PublishPacket,
+    received_at: Instant,
 }
 
 pub type Mailbox = mpsc::Sender<packet::Packet>;
@@ -123,7 +144,8 @@ impl Session {
                     keep_alive: 0,
                     will_message: None,
                     next_packet_id: 1, // Start from 1, 0 is reserved
-                    qos1_queue: VecDeque::new(),
+                    inflight_queue: VecDeque::new(),
+                    inbound_qos2: HashMap::new(),
                 };
 
                 runtime.run().await;
@@ -577,7 +599,7 @@ impl Runtime {
                 }
             }
             // Clear in-flight messages
-            self.qos1_queue.clear();
+            self.inflight_queue.clear();
         }
         Ok(())
     }
@@ -628,8 +650,9 @@ impl Runtime {
                         packet: pub_packet,
                         timestamp: Instant::now(),
                         retry_count: 0,
+                        qos2_state: None, // QoS=1
                     };
-                    self.qos1_queue.push_back(inflight);
+                    self.inflight_queue.push_back(inflight);
                 } else {
                     // QoS=1 with DUP: Just send it
                     send_packet(packet::Packet::Publish(pub_packet), writer).await?;
@@ -650,12 +673,12 @@ impl Runtime {
         );
 
         // Find and remove the acknowledged message from in-flight queue
-        self.qos1_queue
+        self.inflight_queue
             .retain(|inflight| inflight.packet.packet_id != Some(packet.packet_id));
 
         debug!(
             "Removed acknowledged message, {} messages still in-flight",
-            self.qos1_queue.len()
+            self.inflight_queue.len()
         );
 
         Ok(true)
@@ -838,7 +861,7 @@ impl Runtime {
         let mut to_retransmit = Vec::new();
 
         // Update retry counts and collect messages to retransmit
-        self.qos1_queue.retain_mut(|inflight| {
+        self.inflight_queue.retain_mut(|inflight| {
             let elapsed_ms = now.duration_since(inflight.timestamp).as_millis() as u64;
 
             if elapsed_ms >= retransmission_interval_ms {
@@ -929,7 +952,7 @@ impl Runtime {
 
         // Convert in-flight messages
         let persisted_inflight: Vec<PersistedInflightMessage> = self
-            .qos1_queue
+            .inflight_queue
             .iter()
             .map(|inflight| PersistedInflightMessage {
                 client_id: client_id.clone(),
@@ -1025,6 +1048,14 @@ impl Runtime {
 
         // Restore in-flight messages
         for msg in persisted_inflight {
+            // Determine qos2_state based on QoS level
+            // TODO: Phase 6 will add proper qos2_state persistence
+            let qos2_state = if msg.qos == StoredQoS::ExactlyOnce {
+                Some(Qos2State::AwaitingPubRec) // Default to initial state
+            } else {
+                None
+            };
+
             let inflight = InflightMessage {
                 packet: packet::PublishPacket {
                     topic: msg.topic,
@@ -1036,14 +1067,15 @@ impl Runtime {
                 },
                 timestamp: Instant::now(),
                 retry_count: msg.retry_count,
+                qos2_state,
             };
-            self.qos1_queue.push_back(inflight);
+            self.inflight_queue.push_back(inflight);
         }
 
-        if !self.qos1_queue.is_empty() {
+        if !self.inflight_queue.is_empty() {
             info!(
                 "Restored {} inflight messages for session {}",
-                self.qos1_queue.len(),
+                self.inflight_queue.len(),
                 client_id
             );
         }
