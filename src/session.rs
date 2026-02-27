@@ -234,14 +234,14 @@ impl Runtime {
     async fn do_processing(&mut self) -> State {
         debug!("Session {} STATE PROCESSING", self.id);
 
-        let mut stream = match self.stream.take() {
+        let stream = match self.stream.take() {
             Some(stream) => stream,
             None => {
                 error!("Error processing session {} with no client stream", self.id);
                 return State::Cleanup;
             }
         };
-        let (mut reader, mut writer) = stream.split();
+        let (mut reader, mut writer) = stream.into_split();
         let mut next_state = State::Cleanup;
 
         // Keep-alive setup

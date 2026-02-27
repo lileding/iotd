@@ -7,7 +7,7 @@ use tokio::time::timeout;
 async fn test_simple_connect() {
     // Start server
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 

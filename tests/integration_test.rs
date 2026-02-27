@@ -21,7 +21,7 @@ async fn test_basic_connect_and_disconnect() {
     init_test_logging();
     // Start server
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -66,7 +66,7 @@ async fn test_publish_subscribe() {
     init_test_logging();
     // Start server
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -141,7 +141,7 @@ async fn test_publish_subscribe() {
 async fn test_clean_session_false_persistence() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -211,7 +211,7 @@ async fn test_clean_session_false_persistence() {
 async fn test_clean_session_true_no_persistence() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -275,7 +275,7 @@ async fn test_clean_session_true_no_persistence() {
 async fn test_session_takeover() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -353,7 +353,7 @@ async fn test_session_takeover() {
 async fn test_clean_session_transition() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -427,7 +427,7 @@ async fn test_clean_session_transition() {
 async fn test_keep_alive_timeout() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -470,7 +470,7 @@ async fn test_keep_alive_timeout() {
 async fn test_keep_alive_with_pingreq() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -522,7 +522,7 @@ async fn test_keep_alive_with_pingreq() {
 async fn test_keep_alive_zero_disabled() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -596,7 +596,7 @@ async fn read_connack_with_session_present(stream: &mut TcpStream) -> bool {
 async fn test_retained_message_basic() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -658,7 +658,7 @@ async fn test_retained_message_basic() {
 async fn test_retained_message_update() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -733,7 +733,7 @@ async fn test_retained_message_update() {
 async fn test_retained_message_delete() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -804,7 +804,7 @@ async fn test_retained_message_delete() {
 async fn test_retained_message_wildcard() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -885,7 +885,7 @@ async fn test_retained_message_wildcard() {
 async fn test_will_message_on_disconnect() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -971,7 +971,7 @@ async fn test_will_message_on_disconnect() {
 async fn test_will_message_not_sent_on_disconnect() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -1051,7 +1051,7 @@ async fn test_will_message_not_sent_on_disconnect() {
 async fn test_will_message_on_keepalive_timeout() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -1131,7 +1131,7 @@ async fn test_will_message_on_keepalive_timeout() {
 async fn test_protocol_validation() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -1212,7 +1212,7 @@ async fn test_protocol_validation() {
 async fn test_client_id_validation() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -1325,7 +1325,7 @@ async fn test_client_id_validation() {
 async fn test_topic_validation() {
     init_test_logging();
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 

@@ -3,8 +3,11 @@
 # This file demonstrates all available configuration options for IoTD.
 # Copy this file and modify as needed for your deployment.
 
-# Listen address for MQTT connections
-# Examples: "127.0.0.1:1883", "0.0.0.0:1883", "[::]:1883"
+# Listen addresses for MQTT connections
+# Supports protocol prefixes: tcp:// (default), tls:// (requires [tls] section)
+# Can be a single string or an array:
+#   listen = "0.0.0.0:1883"
+#   listen = ["tcp://0.0.0.0:1883", "tls://0.0.0.0:8883"]
 listen = "0.0.0.0:1883"
 
 # Maximum number of retained messages to store
@@ -55,3 +58,12 @@ backend = "allowall"
 # Lines starting with '#' are comments
 # Default: "acl.conf"
 acl_file = "acl.conf"
+
+# [tls]
+# TLS configuration (required when any listen address uses tls://)
+#
+# Path to PEM-encoded server certificate (or certificate chain)
+# cert_file = "server.crt"
+#
+# Path to PEM-encoded private key
+# key_file = "server.key"

@@ -92,7 +92,7 @@ async fn test_qos1_publish_puback() {
     init_test_logging();
     // Start server
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -131,7 +131,7 @@ async fn test_qos1_subscriber_flow() {
     init_test_logging();
     // Start server
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -213,7 +213,7 @@ async fn test_qos1_message_tracking() {
     init_test_logging();
     // Start server
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -335,7 +335,7 @@ async fn test_qos1_retransmission() {
     init_test_logging();
     // Start server with faster retransmission for testing
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     config.retransmission_interval_ms = 1000; // 1 second for faster testing
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
@@ -442,7 +442,7 @@ async fn test_qos1_duplicate_handling() {
     init_test_logging();
     // Start server
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -539,7 +539,7 @@ async fn test_qos1_max_retransmission_limit() {
     init_test_logging();
     // Start server with low retransmission limit for testing
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     config.retransmission_interval_ms = 500; // 500ms for faster testing
     config.max_retransmission_limit = 2; // Only allow 2 retries
     let server = iotd::server::start(config).await.unwrap();
@@ -634,7 +634,7 @@ async fn test_qos_downgrade() {
     init_test_logging();
     // Start server
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 
@@ -735,7 +735,7 @@ async fn test_qos1_message_ordering() {
 
     // Start server
     let mut config = iotd::config::Config::default();
-    config.listen = "127.0.0.1:0".to_string();
+    config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
     let address = server.address().await.unwrap();
 

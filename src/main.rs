@@ -28,11 +28,10 @@ fn print_help() {
     println!("    -c, --config <FILE>     Load configuration from TOML file");
     println!();
     println!("EXAMPLES:");
-    println!("    iotd                    # Listen on 127.0.0.1:1883");
-    println!("    iotd -l 0.0.0.0:1883    # Listen on all interfaces");
-    println!("    iotd -l [::]:1883       # Listen on all interfaces (IPv6)");
-    println!("    iotd -l [::1]:1883      # Listen on localhost (IPv6)");
-    println!("    iotd -c config.toml     # Load configuration from file");
+    println!("    iotd                            # Listen on 127.0.0.1:1883");
+    println!("    iotd -l 0.0.0.0:1883            # Listen on all interfaces");
+    println!("    iotd -l tls://0.0.0.0:8883      # Listen with TLS (requires [tls] in config)");
+    println!("    iotd -c config.toml             # Load configuration from file");
 }
 
 #[tokio::main]
@@ -105,10 +104,12 @@ async fn main() -> Result<()> {
 
     // Override listen address if provided via CLI
     if let Some(addr) = listen_address {
-        config.listen = addr;
+        config.listen = vec![addr];
     }
 
-    info!("Listening on: {}", config.listen);
+    for addr in &config.listen {
+        info!("Listening on: {}", addr);
+    }
     let server = iotd::server::start(config).await?;
 
     // Wait for Ctrl+C
