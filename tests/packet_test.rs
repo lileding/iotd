@@ -4,7 +4,7 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 /// Helper function to start test server and return server with address
-async fn start_test_server() -> (iotd::server::Server, String) {
+async fn start_test_server() -> (iotd::server::ServerHandle, String) {
     let mut config = iotd::config::Config::default();
     config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();

@@ -15,22 +15,22 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt},
     sync::mpsc,
-    task::JoinHandle,
     time::{Duration, Instant},
 };
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+pub type SessionFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+
 pub struct Session {
     id: String,
     command_tx: mpsc::Sender<Command>,
-    task: JoinHandle<()>,
 }
 
-struct Runtime {
+struct Runtime<'a> {
     id: String,
     client_id: Option<String>,
-    broker: Arc<Broker>,
+    broker: &'a Broker,
     takeover: TakeoverAction,
     command_rx: mpsc::Receiver<Command>,
     message_tx: mpsc::Sender<packet::Packet>,
@@ -120,40 +120,42 @@ pub type TakeoverAction = Arc<
 >;
 
 impl Session {
-    pub async fn spawn(broker: Arc<Broker>, stream: Box<dyn AsyncStream>) -> Session {
+    pub fn new(broker: &Broker, stream: Box<dyn AsyncStream>) -> (Session, SessionFuture<'_>) {
         let id = Uuid::new_v4().to_string();
         let (command_tx, command_rx) = mpsc::channel(10);
         let (message_tx, message_rx) = mpsc::channel(100);
 
-        Self {
+        let handle = Session {
             id: id.clone(),
             command_tx: command_tx.clone(),
+        };
 
-            task: tokio::spawn(async move {
-                let mut runtime = Runtime {
-                    id,
-                    client_id: None,
-                    broker,
-                    takeover: Self::make_takeover(command_tx),
-                    command_rx,
-                    message_tx,
-                    message_rx,
-                    stream: Some(stream),
-                    clean_session: true,
-                    keep_alive: 0,
-                    will_message: None,
-                    next_packet_id: 1, // Start from 1, 0 is reserved
-                    inflight_queue: VecDeque::new(),
-                    inbound_qos2: HashMap::new(),
-                };
+        let future = Box::pin(async move {
+            let mut runtime = Runtime {
+                id,
+                client_id: None,
+                broker,
+                takeover: Self::make_takeover(command_tx),
+                command_rx,
+                message_tx,
+                message_rx,
+                stream: Some(stream),
+                clean_session: true,
+                keep_alive: 0,
+                will_message: None,
+                next_packet_id: 1, // Start from 1, 0 is reserved
+                inflight_queue: VecDeque::new(),
+                inbound_qos2: HashMap::new(),
+            };
 
-                runtime.run().await;
-                runtime
-                    .broker
-                    .remove_session(&runtime.id, runtime.client_id.as_ref())
-                    .await;
-            }),
-        }
+            runtime.run().await;
+            runtime
+                .broker
+                .remove_session(&runtime.id, runtime.client_id.as_ref())
+                .await;
+        });
+
+        (handle, future)
     }
 
     pub fn id(&self) -> &str {
@@ -179,18 +181,17 @@ impl Session {
         )
     }
 
-    pub async fn cancel(self) -> JoinHandle<()> {
+    pub async fn cancel(&self) {
         self.command_tx
             .send(Command::Cancel)
             .await
             .unwrap_or_else(|e| {
                 info!("Session canceled too early: {}", e);
             });
-        self.task
     }
 }
 
-impl Runtime {
+impl Runtime<'_> {
     fn next_packet_id(&mut self) -> u16 {
         let id = self.next_packet_id;
         self.next_packet_id = if self.next_packet_id == 65535 {

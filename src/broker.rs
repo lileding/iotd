@@ -2,14 +2,14 @@ use crate::auth::{Authenticator, Authorizer};
 use crate::config::Config;
 use crate::protocol::packet::{PublishPacket, QoS};
 use crate::router::Router;
-use crate::session::{Mailbox, Session, TakeoverAction};
+use crate::session::{Mailbox, Session, SessionFuture, TakeoverAction};
 use crate::storage::Storage;
 use crate::transport::AsyncStream;
 use dashmap::{mapref::entry::Entry, DashMap};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::info;
 
 pub struct Broker {
     sessions: Mutex<HashMap<String, Session>>,
@@ -27,9 +27,9 @@ impl Broker {
         storage: Arc<dyn Storage>,
         authenticator: Arc<dyn Authenticator>,
         authorizer: Arc<dyn Authorizer>,
-    ) -> Arc<Self> {
+    ) -> Self {
         let retained_message_limit = config.retained_message_limit;
-        Arc::new(Self {
+        Self {
             sessions: Mutex::new(HashMap::new()),
             named_clients: DashMap::new(),
             router: Router::new(retained_message_limit, Arc::clone(&storage)),
@@ -37,17 +37,15 @@ impl Broker {
             storage,
             authenticator,
             authorizer,
-        })
+        }
     }
 
-    pub async fn add_client(self: &Arc<Self>, stream: Box<dyn AsyncStream>) {
-        // Lock the sessions
+    pub async fn add_client(&self, stream: Box<dyn AsyncStream>) -> SessionFuture<'_> {
+        let (handle, future) = Session::new(self, stream);
         let mut sessions = self.sessions.lock().await;
-
-        let session = Session::spawn(Arc::clone(self), stream).await;
-
-        info!("Added session {} to broker", session.id());
-        sessions.insert(session.id().to_owned(), session);
+        info!("Added session {} to broker", handle.id());
+        sessions.insert(handle.id().to_owned(), handle);
+        future
     }
 
     pub fn config(&self) -> &Config {
@@ -66,29 +64,22 @@ impl Broker {
         &self.authorizer
     }
 
-    pub async fn clean_all_sessions(&self) {
-        // Lock the sessions
-        let mut sessions = self.sessions.lock().await;
+    /// Send Cancel to all sessions and clear broker state.
+    /// Caller is responsible for awaiting session futures to completion.
+    pub async fn cancel_all_sessions(&self) {
+        let sessions: Vec<Session> = {
+            let mut locked = self.sessions.lock().await;
+            locked.drain().map(|(_, s)| s).collect()
+        };
+
+        info!("Cancelling {} sessions", sessions.len());
+
+        for session in &sessions {
+            session.cancel().await;
+        }
 
         self.named_clients.clear();
-        let old_sessions: Vec<(String, Session)> = sessions.drain().collect();
-
-        drop(sessions);
-        // Unlock the sessions
-
-        info!("Begin clear sessions");
-
-        let mut handles = Vec::with_capacity(old_sessions.len());
-        for (_, session) in old_sessions {
-            handles.push(session.cancel().await);
-        }
-        for handle in handles {
-            handle.await.unwrap_or_else(|e| {
-                error!("Error in join task: {}", e);
-            });
-        }
-
-        info!("All sessions cleaned");
+        info!("All sessions cancelled");
     }
 
     pub async fn has_collision(

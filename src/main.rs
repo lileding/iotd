@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use iotd::config::Config;
+use iotd::server::Server;
 use std::fs;
 use tokio::signal;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, Level};
 
 // Version information
@@ -110,13 +112,20 @@ async fn main() -> Result<()> {
     for addr in &config.listen {
         info!("Listening on: {}", addr);
     }
-    let server = iotd::server::start(config).await?;
+    let server = Server::new(config)?;
 
-    // Wait for Ctrl+C
-    signal::ctrl_c().await?;
-    info!("Received SIGINT, initiating graceful shutdown...");
+    let cancel = CancellationToken::new();
+    let signal_cancel = cancel.clone();
 
-    server.stop().await?;
+    let (_, server_result) = tokio::join!(
+        async move {
+            signal::ctrl_c().await.ok();
+            info!("Received SIGINT, initiating graceful shutdown...");
+            signal_cancel.cancel();
+        },
+        server.run(&cancel),
+    );
+    server_result?;
     info!("Graceful shutdown completed");
 
     Ok(())

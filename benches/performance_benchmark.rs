@@ -117,7 +117,7 @@ async fn wait_for_connack(stream: &mut TcpStream) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-async fn start_test_server() -> (iotd::server::Server, u16) {
+async fn start_test_server() -> (iotd::server::ServerHandle, u16) {
     let mut config = iotd::config::Config::default();
     config.listen = vec!["127.0.0.1:0".to_string()];
     let server = iotd::server::start(config).await.unwrap();
