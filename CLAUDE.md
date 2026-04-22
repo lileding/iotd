@@ -70,22 +70,22 @@ IoTHub is a high-performance MQTT server implemented in Rust using Tokio. The ar
 
 ### Core Components
 
-- **Server** (`src/server.rs`): Central orchestrator managing brokers, sessions, routing, and shutdown
-- **Broker** (`src/broker.rs`): Protocol-specific network listeners (TCP, WebSocket, TLS planned)
-- **Session** (`src/session.rs`): Individual client connection handlers with unique sessionId
+- **Server** (`src/server.rs`): Central orchestrator — binds listeners, runs the main `select!` loop that coordinates accept loops and session futures
+- **Broker** (`src/broker.rs`): Shared state — session registry, named client collision map, router, storage, auth
+- **Session** (`src/session.rs`): Individual client connection handlers. `Session::new()` returns a handle + future; the future is polled cooperatively in `FuturesUnordered`, no `tokio::spawn`
 - **Router** (`src/router.rs`): Message routing and subscription management using sessionId internally
 - **Protocol** (`src/protocol/`): MQTT v3.1.1 packet parsing and handling
-- **Transport** (`src/transport.rs`): Abstraction layer for different network protocols
+- **Transport** (`src/transport.rs`): Abstraction layer for different network protocols (TCP, TLS)
 - **Config** (`src/config.rs`): Comprehensive configuration system with TOML support
 
 ### Key Design Patterns
 
-1. **CancellationToken Architecture**: Uses `tokio_util::sync::CancellationToken` throughout for race-condition-free shutdown
-2. **Half-connected Sessions**: Tracked separately until CONNECT received to manage incomplete connections
-3. **Stream Passing**: Packet handlers receive stream reference to avoid write lock deadlocks
-4. **Thread-safe Cleanup**: Lock-based swap pattern for safe concurrent operations
-5. **Event-driven**: tokio::select! for responsive packet and shutdown handling
-6. **Session Management**: SessionId starts as `__anon_$uuid`, becomes `__client_$clientId` after CONNECT
+1. **Structured concurrency, no spawn**: All session futures run in a single `FuturesUnordered` inside `serve()`. Accept loops feed new connections via `mpsc::channel`. No `tokio::spawn` in the server core — the only spawn is in the `start()` test helper.
+2. **Ownership over Arc**: `Server` owns `Broker` directly. Sessions borrow `&Broker` via lifetime (`Runtime<'a>`). `Arc` is only used for `dyn Storage`/`Authenticator`/`Authorizer` (shared between Broker and Router).
+3. **CancellationToken Architecture**: Uses `tokio_util::sync::CancellationToken` for shutdown. Signal propagates: `cancel()` → accept loops break → `join_all` completes → main loop breaks → sessions cancelled → drained.
+4. **Three-layer select!**: `serve()` select (dispatch) → `join_all` (drive accept loops) → accept_loop select (accept + cancel).
+5. **Stream Passing**: Packet handlers receive stream reference to avoid write lock deadlocks
+6. **Event-driven**: tokio::select! for responsive packet and shutdown handling
 
 ### Current Status (Milestone 5 - Completed)
 
@@ -178,10 +178,10 @@ Default server runs on `127.0.0.1:1883` for MQTT clients.
 
 ### Key Technical Notes
 
+- **No spawn in server core**: Sessions are cooperative futures in `FuturesUnordered`, not spawned tasks. Accept loops communicate via `mpsc::channel(64)`.
+- **Lifetime-based borrowing**: `Runtime<'a>` borrows `&'a Broker` instead of cloning `Arc<Broker>`. Session futures carry the lifetime via `SessionFuture<'a> = Pin<Box<dyn Future<Output=()> + Send + 'a>>`.
+- **Shutdown sequence**: cancel token → accept loops break → `join_all` completes → `cancel_all_sessions()` sends Cancel to all sessions → drain `FuturesUnordered` → cleanup.
 - **Deadlock Prevention**: Session packet handlers accept stream parameter to avoid double-locking
-- **Session Cleanup**: `cleanup_and_exit()` removes half-connected sessions only if not connected
-- **Shutdown Sequence**: Server → Brokers → Sessions with proper ordering
-- **Error Handling**: `handle_message` failures now terminate session loop
 - **Import Pattern**: Use `use crate::protocol::packet;` for module-level imports
 - **Router Architecture**: Uses RwLock with bidirectional mapping (filter→sessions, session→filters) for efficient routing and cleanup
 - **Wildcard Matching**: Implements MQTT-compliant topic matching with `+` (single-level) and `#` (multi-level) wildcards

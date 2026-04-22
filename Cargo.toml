@@ -30,7 +30,8 @@ rustls-pemfile = "2"
 
 [dev-dependencies]
 tokio-test = "0.4"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+socket2 = "0.5"
 tempfile = "3"
 rcgen = "0.13"
 
